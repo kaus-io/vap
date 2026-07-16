@@ -2,6 +2,7 @@
 
 package com.zxhhyj.vap.decode
 
+import android.graphics.SurfaceTexture
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
@@ -16,7 +17,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.android.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -27,7 +27,7 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 internal object VapSharedGlRuntime {
     private data class Session(
         val thread: HandlerThread,
-        val handler: Handler,
+        val frameCallbackHandler: Handler,
         val dispatcher: CoroutineDispatcher,
         val scope: CoroutineScope,
     )
@@ -44,20 +44,19 @@ internal object VapSharedGlRuntime {
     private val session = AtomicReference<Session?>(null)
     private val egl = AtomicReference<Egl?>(null)
 
-    suspend fun acquire(): Handler = mutex.withLock {
-        if (refCount.fetchAndAdd(1) == 0) {
-            startSessionLocked()
+    suspend fun acquire() {
+        mutex.withLock {
+            if (refCount.fetchAndAdd(1) == 0) {
+                startSessionLocked()
+            }
         }
-        session.load()?.handler ?: error("shared GL handler missing")
     }
 
-    fun release() {
-        runBlocking {
-            mutex.withLock {
-                if (refCount.addAndFetch(-1) <= 0) {
-                    refCount.store(0)
-                    stopSessionLocked()
-                }
+    suspend fun release() {
+        mutex.withLock {
+            if (refCount.addAndFetch(-1) <= 0) {
+                refCount.store(0)
+                stopSessionLocked()
             }
         }
     }
@@ -79,7 +78,17 @@ internal object VapSharedGlRuntime {
         }
     }
 
-    fun withGlBlocking(block: () -> Unit): Boolean = runBlocking { withGl(block) }
+    fun setOnFrameAvailableListener(
+        surfaceTexture: SurfaceTexture,
+        listener: SurfaceTexture.OnFrameAvailableListener?,
+    ) {
+        val handler = session.load()?.frameCallbackHandler
+        if (listener == null || handler == null) {
+            surfaceTexture.setOnFrameAvailableListener(null)
+        } else {
+            surfaceTexture.setOnFrameAvailableListener(listener, handler)
+        }
+    }
 
     fun makeCurrent(surface: EGLSurface): Boolean {
         val state = egl.load() ?: return false
@@ -114,10 +123,10 @@ internal object VapSharedGlRuntime {
 
     private suspend fun startSessionLocked() {
         val thread = HandlerThread("vap-gl-shared").also { it.start() }
-        val handler = Handler(thread.looper)
-        val dispatcher = handler.asCoroutineDispatcher("vap-gl-shared")
+        val frameCallbackHandler = Handler(thread.looper)
+        val dispatcher = frameCallbackHandler.asCoroutineDispatcher("vap-gl-shared")
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
-        session.store(Session(thread, handler, dispatcher, scope))
+        session.store(Session(thread, frameCallbackHandler, dispatcher, scope))
         val ready = withContext(dispatcher) { initEgl() }
         if (!ready) {
             stopSessionLocked()

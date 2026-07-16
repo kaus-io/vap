@@ -37,7 +37,12 @@ dispose 的祖先上，只改 `isPlaying`。
 ### 主路径：Split（常驻可暂停）
 
 ```kotlin
-val composition by rememberVapComposition(VapCompositionSpec.File(pathToMp4))
+// 同步加载（本地资源 / 预加载，composition 立刻可用）
+val composition = remember(pathToMp4) {
+    loadVapComposition(VapCompositionSpec.File(pathToMp4))
+}
+// 或异步：val composition by rememberVapComposition(VapCompositionSpec.File(pathToMp4))
+
 val anim = animateVapCompositionAsState(
     composition,
     iterations = VapConstants.IterateForever,

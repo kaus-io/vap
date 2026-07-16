@@ -22,8 +22,12 @@ import kotlin.time.TimeSource
 @Stable
 public class VapAnimationState internal constructor(
     internal val decoder: VapFrameDecoder,
+    internal val presentMode: VapPresentMode,
 ) {
     private var heldFrame: VapPlatformFrame? = null
+
+
+    private var drawInvalidationEnabled: Boolean = true
 
     internal var drawGeneration by mutableIntStateOf(0)
         private set
@@ -36,10 +40,26 @@ public class VapAnimationState internal constructor(
 
     private var lastProgressMark = TimeSource.Monotonic.markNow()
 
+
+    internal val usesSurfaceHost: Boolean
+        get() = presentMode == VapPresentMode.Surface
+
     internal fun currentFrame(): VapPlatformFrame? = heldFrame
 
     internal fun setDisplaySize(widthPx: Int, heightPx: Int) {
         decoder.setDisplaySize(widthPx, heightPx)
+        if (widthPx <= 0 || heightPx <= 0) {
+            setDrawInvalidationEnabled(false)
+        }
+    }
+
+
+    internal fun setDrawInvalidationEnabled(enabled: Boolean) {
+        if (drawInvalidationEnabled == enabled) return
+        drawInvalidationEnabled = enabled
+        if (enabled && heldFrame != null) {
+            drawGeneration++
+        }
     }
 
     public fun syncPlaying(playing: Boolean) {
@@ -50,7 +70,9 @@ public class VapAnimationState internal constructor(
     internal fun present(platformFrame: VapPlatformFrame) {
         val previous = heldFrame
         heldFrame = platformFrame
-        drawGeneration++
+        if (drawInvalidationEnabled) {
+            drawGeneration++
+        }
         previous?.release()
     }
 
@@ -87,10 +109,34 @@ public fun animateVapCompositionAsState(
     fps: Int? = null,
     onCompleted: (() -> Unit)? = null,
     onError: ((Throwable) -> Unit)? = null,
+): VapAnimationState = animateVapCompositionAsState(
+    composition = composition,
+    isPlaying = isPlaying,
+    iterations = iterations,
+    fps = fps,
+    onCompleted = onCompleted,
+    onError = onError,
+    presentModeOverride = null,
+)
+
+@Composable
+internal fun animateVapCompositionAsState(
+    composition: VapComposition?,
+    isPlaying: Boolean = true,
+    iterations: Int = 1,
+    fps: Int? = null,
+    onCompleted: (() -> Unit)? = null,
+    onError: ((Throwable) -> Unit)? = null,
+    presentModeOverride: VapPresentMode?,
 ): VapAnimationState {
-    val state = remember { VapAnimationState(VapFrameDecoder()) }
+    val presentMode = currentVapPresentMode(override = presentModeOverride)
+    val state = remember(presentMode) {
+        val decoder = VapFrameDecoder().also { it.configurePresentMode(presentMode) }
+        VapAnimationState(decoder = decoder, presentMode = presentMode)
+    }
     val loopForever = iterations == VapConstants.IterateForever
     val decoderLoop = loopForever || iterations > 1
+    val surfaceMode = state.usesSurfaceHost
 
     DisposableEffect(state) {
         onDispose { state.close() }
@@ -118,12 +164,17 @@ public fun animateVapCompositionAsState(
         var playCount = 0
         while (isActive) {
             try {
-                val next = state.decoder.nextFrame() ?: run {
-                    state.publishProgress(1f, force = true)
-                    onCompleted?.invoke()
-                    break
+                when (val advance = state.decoder.advancePresentedFrame(surfaceMode)) {
+                    VapFrameAdvance.Ended -> {
+                        state.publishProgress(1f, force = true)
+                        onCompleted?.invoke()
+                        break
+                    }
+
+                    is VapFrameAdvance.Bitmap -> state.present(advance.frame)
+
+                    VapFrameAdvance.SurfacePresented -> Unit
                 }
-                state.present(next)
                 val atBoundary = index + 1 >= total
                 state.publishProgress(
                     value = (index + 1).toFloat() / total,

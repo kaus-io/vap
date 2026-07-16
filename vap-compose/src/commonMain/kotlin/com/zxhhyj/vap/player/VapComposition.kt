@@ -18,6 +18,21 @@ public class VapComposition internal constructor(
     internal val source: VapSource,
 )
 
+
+public fun loadVapComposition(spec: VapCompositionSpec): VapComposition {
+    val source = spec.toVapSource()
+    val config = when (spec) {
+        is VapCompositionSpec.File -> parseMp4File(spec.path)
+        is VapCompositionSpec.Bytes -> VapcParser.parseMp4(spec.data)
+    }
+    return VapComposition(config, source)
+}
+
+
+public fun loadVapComposition(source: VapSource): VapComposition =
+    loadVapComposition(source.toCompositionSpec())
+
+
 @Composable
 public fun rememberVapComposition(
     spec: VapCompositionSpec,
@@ -29,12 +44,7 @@ public fun rememberVapComposition(
         state.value = null
         try {
             state.value = withContext(Dispatchers.IO) {
-                val source = spec.toVapSource()
-                val config = when (spec) {
-                    is VapCompositionSpec.File -> parseMp4File(spec.path)
-                    is VapCompositionSpec.Bytes -> VapcParser.parseMp4(spec.data)
-                }
-                VapComposition(config, source)
+                loadVapComposition(spec)
             }
         } catch (t: Throwable) {
             if (t is CancellationException) throw t

@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<resources>
+    <string name="demo_home_title">VAP Cases</string>
+    <string name="demo_home_subtitle">Scenarios aligned with app-hanna for playback and scroll/switch performance</string>
+    <string name="demo_back">Back</string>
+    <string name="demo_empty_assets">No VAP assets available</string>
+    <string name="demo_platform_unavailable">This case is unavailable on this platform (Android Surface)</string>
+
+    <string name="case_home_hero_title">Home Hero</string>
+    <string name="case_home_hero_subtitle">hanna_home · looping home hero</string>
+    <string name="case_setting_pager_title">Setting Pager</string>
+    <string name="case_setting_pager_subtitle">about_card · swipe to feel jank</string>
+    <string name="case_setting_pager_surface_title">Setting Pager (Surface)</string>
+    <string name="case_setting_pager_surface_subtitle">about_card · Android Surface direct output</string>
+    <string name="case_hanna_ball_title">Hanna Ball</string>
+    <string name="case_hanna_ball_subtitle">Idle/Think/Speech · three persistent sessions</string>
+    <string name="case_window_expand_title">Window Expand</string>
+    <string name="case_window_expand_subtitle">HannaWindow-style expand · first-frame latency</string>
+    <string name="case_touch_wake_title">Touch Wake</string>
+    <string name="case_touch_wake_subtitle">Circular floating button · touch_wake</string>
+    <string name="case_instance_stress_title">Instance Stress</string>
+    <string name="case_instance_stress_subtitle">Android Surface · add/remove concurrent instances</string>
+
+    <string name="status_playing_asset">playing=%1$s</string>
+    <string name="status_missing_hanna_home">missing hanna_home.mp4</string>
+    <string name="status_progress_percent">progress %1$d%%</string>
+    <string name="status_asset">asset=%1$s</string>
+    <string name="status_missing_touch_wake">missing hanna_touch_wake</string>
+    <string name="status_hanna_ball_ready">playing=%1$s · sessions stay open</string>
+    <string name="status_hanna_ball_missing">missing idle/think/speech assets</string>
+    <string name="status_setting_pager">page=%1$d/%2$d settled=%3$d · %4$s</string>
+    <string name="status_setting_pager_surface">Surface · page=%1$d/%2$d settled=%3$d · %4$s</string>
+    <string name="status_missing_about_card">missing about_card</string>
+    <string name="status_window_expand">target=%1$s current=%2$s playing=%3$s h=%4$ddp · %5$s</string>
+    <string name="status_missing_idle">missing idle</string>
+    <string name="status_instance_stress">Surface · asset=%1$s · count=%2$d · %3$dx%4$d fullscreen</string>
+    <string name="status_no_asset">no asset</string>
+    <string name="status_progress_playing">progress %1$d%% · decoding</string>
+    <string name="status_progress_paused">progress %1$d%% · paused</string>
+
+    <string name="settings_block_wake_lang">Wake word / language</string>
+    <string name="settings_block_sensitivity">Sensitivity</string>
+    <string name="settings_block_volume">Volume / voice</string>
+    <string name="settings_placeholder_item">Placeholder %1$d</string>
+    <string name="settings_page_title">Settings page %1$d</string>
+    <string name="settings_hint_page2_default">Swipe back to page 0 and watch jank near VAP</string>
+    <string name="settings_hint_page2_surface">Compare with default Setting Pager for swipe jank</string>
+    <string name="settings_hint_page3_default">about session stays alive at case scope with isPlaying=true</string>
+    <string name="settings_hint_page3_surface">Surface path · skip eglSwapBuffers off-screen</string>
+    <string name="settings_hint_page4">Stay farther from VAP, then swipe back to compare frame cost</string>
+    <string name="settings_hint_page5">Last page · extra pages stretch the swipe path for stress</string>
+
+    <string name="ball_idle">Idle</string>
+    <string name="ball_think">Think</string>
+    <string name="ball_speech">Speech</string>
+
+    <string name="action_show">Show</string>
+    <string name="action_hide">Hide</string>
+    <string name="gate_hint_like_hanna">Hanna-aligned: isPlaying only after expand. Late first frame if content appears mid-animation.</string>
+    <string name="window_collapsed_hint">Collapsed · tap Show to expand</string>
+
+    <string name="stress_minus_one">−1</string>
+    <string name="stress_plus_one">+1</string>
+    <string name="stress_plus_four">+4</string>
+    <string name="stress_clear">Clear</string>
+    <string name="stress_empty_hint">Tap +1 / +4: Surface cells fill the screen and play together</string>
+    <string name="stress_cell_label">#%1$d</string>
+</resources>

@@ -13,7 +13,6 @@ import android.opengl.EGL14
 import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
-import android.os.Handler
 import android.view.Surface
 import com.zxhhyj.vap.player.VapConfig
 import com.zxhhyj.vap.player.VapRect
@@ -39,7 +38,9 @@ internal class VapGlFrame(
 
 internal class VapOffscreenGlPipeline(
     private val config: VapConfig,
-    private val frameChannel: Channel<VapGlFrame>,
+    private val outputMode: VapGlOutputMode,
+    private val frameChannel: Channel<VapGlFrame>?,
+    private val presentedTicks: Channel<Unit>?,
     private val stopped: AtomicBoolean,
     private val onFrameComposited: () -> Unit,
     private val maxBufferedFrames: Int = FRAME_CHANNEL_CAPACITY,
@@ -67,14 +68,31 @@ internal class VapOffscreenGlPipeline(
         val size: Size,
     )
 
+    private data class WindowOutput(
+        val eglSurface: EGLSurface,
+        val size: Size,
+    )
+
+    private sealed class FrameSink {
+        data class Hardware(val hw: HwOutput) : FrameSink()
+        data class Window(val window: WindowOutput) : FrameSink()
+        data object None : FrameSink()
+    }
+
     private data class GlState(
         val oesTextureId: Int,
         val surfaceTexture: SurfaceTexture,
         val codecSurface: Surface,
         val shader: Shader,
         val mesh: Mesh,
-        val output: HwOutput,
+        val sink: FrameSink,
     )
+
+    private sealed class WindowRequest {
+        data class Attach(val surface: Surface, val size: Size) : WindowRequest()
+        data class Resize(val size: Size) : WindowRequest()
+        data object Detach : WindowRequest()
+    }
 
     private val acquired = AtomicBoolean(false)
     private val gl = AtomicReference<GlState?>(null)
@@ -82,6 +100,8 @@ internal class VapOffscreenGlPipeline(
     private val targetOut = AtomicReference(
         Size(config.width.coerceAtLeast(1), config.height.coerceAtLeast(1)),
     )
+    private val pendingWindow = AtomicReference<WindowRequest?>(null)
+    private val swapEnabled = AtomicBoolean(true)
 
     val codecSurface: Surface?
         get() = gl.load()?.codecSurface
@@ -90,14 +110,43 @@ internal class VapOffscreenGlPipeline(
         targetOut.store(Size(width.coerceAtLeast(1), height.coerceAtLeast(1)))
     }
 
+    fun setSwapEnabled(enabled: Boolean) {
+        swapEnabled.store(enabled)
+    }
+
+    fun attachOutputSurface(surface: Surface, width: Int, height: Int) {
+        if (outputMode != VapGlOutputMode.WindowSurface) return
+        pendingWindow.store(
+            WindowRequest.Attach(
+                surface = surface,
+                size = Size(width.coerceAtLeast(1), height.coerceAtLeast(1)),
+            ),
+        )
+        VapSharedGlRuntime.launch { applyPendingWindowRequest() }
+    }
+
+    fun resizeOutput(width: Int, height: Int) {
+        if (outputMode != VapGlOutputMode.WindowSurface) return
+        pendingWindow.store(
+            WindowRequest.Resize(Size(width.coerceAtLeast(1), height.coerceAtLeast(1))),
+        )
+        VapSharedGlRuntime.launch { applyPendingWindowRequest() }
+    }
+
+    fun detachOutputSurface() {
+        if (outputMode != VapGlOutputMode.WindowSurface) return
+        pendingWindow.store(WindowRequest.Detach)
+        VapSharedGlRuntime.launch { applyPendingWindowRequest() }
+    }
+
     suspend fun start(): Boolean {
-        val handler = VapSharedGlRuntime.acquire()
+        VapSharedGlRuntime.acquire()
         acquired.store(true)
         var created: GlState? = null
         var initError: Throwable? = null
         val ran = VapSharedGlRuntime.withGl {
             try {
-                created = initOnGlThread(handler)
+                created = initOnGlThread()
             } catch (t: Throwable) {
                 initError = t
             }
@@ -113,9 +162,9 @@ internal class VapOffscreenGlPipeline(
         return true
     }
 
-    fun release() {
+    suspend fun release() {
         if (!acquired.exchange(false)) return
-        VapSharedGlRuntime.withGlBlocking {
+        VapSharedGlRuntime.withGl {
             gl.exchange(null)?.let(::releaseOnGlThread)
         }
         VapSharedGlRuntime.release()
@@ -127,27 +176,42 @@ internal class VapOffscreenGlPipeline(
 
     private fun compositeAvailableFrames() {
         if (stopped.load()) return
+        applyPendingWindowRequest()
         val state = gl.load() ?: return
         var permitReleased = false
         try {
             if (!updateTexImage(state)) return
 
-            if (bufferedFrames.load() >= maxBufferedFrames) {
-                onFrameComposited()
-                return
-            }
+            when (outputMode) {
+                VapGlOutputMode.HardwareBuffer -> {
+                    if (bufferedFrames.load() >= maxBufferedFrames) {
+                        onFrameComposited()
+                        return
+                    }
+                    val current = ensureHardwareSink(state)
+                    val hw = (current.sink as FrameSink.Hardware).hw
+                    val frame = drawToHardwareBuffer(current, hw)
+                        ?: error("VAP hardware composite failed")
+                    onFrameComposited()
+                    permitReleased = true
+                    if (stopped.load()) {
+                        frame.release()
+                        return
+                    }
+                    offerFrame(frame)
+                }
 
-            val current = ensureOutputSurface(state)
-            val frame = drawToHardwareBuffer(current, current.output)
-                ?: error("VAP hardware composite failed")
-            onFrameComposited()
-            permitReleased = true
+                VapGlOutputMode.WindowSurface -> {
+                    val sink = state.sink
 
-            if (stopped.load()) {
-                frame.release()
-                return
+                    if (sink is FrameSink.Window && swapEnabled.load()) {
+                        drawToWindowSurface(state, sink.window)
+                    }
+                    onFrameComposited()
+                    permitReleased = true
+                    notifyPresented()
+                }
             }
-            offerFrame(frame)
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
             if (!permitReleased) onFrameComposited()
@@ -170,14 +234,22 @@ internal class VapOffscreenGlPipeline(
     }
 
     private fun offerFrame(frame: VapGlFrame) {
-        while (!frameChannel.trySend(frame).isSuccess) {
-            val dropped = frameChannel.tryReceive().getOrNull()
+        val channel = frameChannel ?: run {
+            frame.release()
+            return
+        }
+        while (!channel.trySend(frame).isSuccess) {
+            val dropped = channel.tryReceive().getOrNull()
             if (dropped == null) {
                 frame.release()
                 return
             }
             dropped.release()
         }
+    }
+
+    private fun notifyPresented() {
+        presentedTicks?.trySend(Unit)
     }
 
     private fun trackBufferedFrame(bitmap: Bitmap, onRelease: () -> Unit): VapGlFrame {
@@ -215,6 +287,16 @@ internal class VapOffscreenGlPipeline(
         return trackBufferedFrame(bitmap) { bitmap.recycle() }
     }
 
+    private fun drawToWindowSurface(state: GlState, window: WindowOutput): Boolean {
+        val w = window.size.w
+        val h = window.size.h
+        if (w <= 0 || h <= 0) return false
+        if (!VapSharedGlRuntime.makeCurrent(window.eglSurface)) return false
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        drawVapQuad(state, w, h)
+        return VapSharedGlRuntime.swapBuffers(window.eglSurface)
+    }
+
     private fun acquireLatestImage(reader: ImageReader): Image? {
         var latest: Image? = null
         try {
@@ -231,23 +313,64 @@ internal class VapOffscreenGlPipeline(
         return latest
     }
 
-    private fun ensureOutputSurface(state: GlState): GlState {
+    private fun ensureHardwareSink(state: GlState): GlState {
         val wanted = targetOut.load()
-        if (wanted == state.output.size) return state
-        releaseOutput(state.output)
-        val updated = state.copy(output = createHardwareOutput(wanted.w, wanted.h))
+        val current = state.sink as? FrameSink.Hardware
+        if (current != null && current.hw.size == wanted) return state
+        if (current != null) releaseHardware(current.hw)
+        val updated =
+            state.copy(sink = FrameSink.Hardware(createHardwareOutput(wanted.w, wanted.h)))
         gl.store(updated)
         return updated
     }
 
-    private fun initOnGlThread(handler: Handler): GlState? {
+    private fun applyPendingWindowRequest() {
+        if (outputMode != VapGlOutputMode.WindowSurface) return
+        val request = pendingWindow.exchange(null) ?: return
+        val state = gl.load() ?: return
+        when (request) {
+            is WindowRequest.Attach -> {
+                releaseSink(state.sink)
+                val eglSurface = VapSharedGlRuntime.createWindowSurface(request.surface)
+                if (eglSurface == EGL14.EGL_NO_SURFACE) {
+                    gl.store(state.copy(sink = FrameSink.None))
+                    return
+                }
+                val window = WindowOutput(eglSurface, request.size)
+
+                if (VapSharedGlRuntime.makeCurrent(eglSurface)) {
+                    GLES20.glViewport(0, 0, request.size.w, request.size.h)
+                    GLES20.glClearColor(0f, 0f, 0f, 0f)
+                    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+                    VapSharedGlRuntime.swapBuffers(eglSurface)
+                }
+                gl.store(state.copy(sink = FrameSink.Window(window)))
+                VapSharedGlRuntime.makeCurrentPbuffer()
+            }
+
+            is WindowRequest.Resize -> {
+                val window = (state.sink as? FrameSink.Window)?.window ?: return
+                if (window.size == request.size) return
+
+                gl.store(state.copy(sink = FrameSink.Window(window.copy(size = request.size))))
+            }
+
+            WindowRequest.Detach -> {
+                releaseSink(state.sink)
+                gl.store(state.copy(sink = FrameSink.None))
+                VapSharedGlRuntime.makeCurrentPbuffer()
+            }
+        }
+    }
+
+    private fun initOnGlThread(): GlState? {
         val oesTextureId = genOesTexture()
         val surfaceTexture = SurfaceTexture(oesTextureId).also { st ->
             st.setDefaultBufferSize(
                 config.videoWidth.coerceAtLeast(1),
                 config.videoHeight.coerceAtLeast(1),
             )
-            st.setOnFrameAvailableListener(this, handler)
+            VapSharedGlRuntime.setOnFrameAvailableListener(st, this)
         }
         val codecSurface = Surface(surfaceTexture)
 
@@ -259,14 +382,22 @@ internal class VapOffscreenGlPipeline(
             return null
         }
 
-        val size = targetOut.load()
+        val sink = when (outputMode) {
+            VapGlOutputMode.HardwareBuffer -> {
+                val size = targetOut.load()
+                FrameSink.Hardware(createHardwareOutput(size.w, size.h))
+            }
+
+            VapGlOutputMode.WindowSurface -> FrameSink.None
+        }
+
         return GlState(
             oesTextureId = oesTextureId,
             surfaceTexture = surfaceTexture,
             codecSurface = codecSurface,
             shader = bindShader(programId),
             mesh = createMesh(),
-            output = createHardwareOutput(size.w, size.h),
+            sink = sink,
         )
     }
 
@@ -300,9 +431,21 @@ internal class VapOffscreenGlPipeline(
         return HwOutput(reader, window, Size(w, h))
     }
 
-    private fun releaseOutput(output: HwOutput) {
+    private fun releaseHardware(output: HwOutput) {
         VapSharedGlRuntime.destroySurface(output.eglSurface)
         output.reader.close()
+    }
+
+    private fun releaseWindow(output: WindowOutput) {
+        VapSharedGlRuntime.destroySurface(output.eglSurface)
+    }
+
+    private fun releaseSink(sink: FrameSink) {
+        when (sink) {
+            is FrameSink.Hardware -> releaseHardware(sink.hw)
+            is FrameSink.Window -> releaseWindow(sink.window)
+            FrameSink.None -> Unit
+        }
     }
 
     private fun drawVapQuad(state: GlState, w: Int, h: Int) {
@@ -323,9 +466,9 @@ internal class VapOffscreenGlPipeline(
 
     private fun releaseOnGlThread(state: GlState) {
         state.codecSurface.release()
-        state.surfaceTexture.setOnFrameAvailableListener(null)
+        VapSharedGlRuntime.setOnFrameAvailableListener(state.surfaceTexture, null)
         state.surfaceTexture.release()
-        releaseOutput(state.output)
+        releaseSink(state.sink)
         GLES20.glDeleteTextures(1, intArrayOf(state.oesTextureId), 0)
         GLES20.glDeleteProgram(state.shader.program)
         VapSharedGlRuntime.makeCurrentPbuffer()
@@ -339,22 +482,22 @@ internal class VapOffscreenGlPipeline(
         GLES20.glTexParameteri(
             GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
             GLES20.GL_TEXTURE_MIN_FILTER,
-            GLES20.GL_LINEAR
+            GLES20.GL_LINEAR,
         )
         GLES20.glTexParameteri(
             GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
             GLES20.GL_TEXTURE_MAG_FILTER,
-            GLES20.GL_LINEAR
+            GLES20.GL_LINEAR,
         )
         GLES20.glTexParameteri(
             GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
             GLES20.GL_TEXTURE_WRAP_S,
-            GLES20.GL_CLAMP_TO_EDGE
+            GLES20.GL_CLAMP_TO_EDGE,
         )
         GLES20.glTexParameteri(
             GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
             GLES20.GL_TEXTURE_WRAP_T,
-            GLES20.GL_CLAMP_TO_EDGE
+            GLES20.GL_CLAMP_TO_EDGE,
         )
         return id
     }

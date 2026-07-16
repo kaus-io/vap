@@ -1,12 +1,11 @@
-﻿@file:OptIn(ExperimentalAtomicApi::class)
+@file:OptIn(ExperimentalAtomicApi::class)
 
 package com.zxhhyj.vap.decode
 
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
-import android.os.Handler
-import android.os.Looper
+import android.view.Surface
 import com.zxhhyj.vap.player.VapConfig
 import com.zxhhyj.vap.player.VapSource
 import kotlinx.coroutines.CancellationException
@@ -23,13 +22,21 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import kotlin.concurrent.atomics.AtomicBoolean
+import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.coroutines.coroutineContext
 
 public actual class VapFrameDecoder actual constructor() {
+    private data class PendingWindowSurface(
+        val surface: Surface,
+        val width: Int,
+        val height: Int,
+    )
+
     private var config: VapConfig? = null
     private var tempFile: File? = null
     private var loop: Boolean = false
+    private var outputMode: VapGlOutputMode = VapGlOutputMode.HardwareBuffer
 
     private var extractor: MediaExtractor? = null
     private var codec: MediaCodec? = null
@@ -37,8 +44,14 @@ public actual class VapFrameDecoder actual constructor() {
 
     private var frameChannel =
         Channel<VapGlFrame>(capacity = VapOffscreenGlPipeline.FRAME_CHANNEL_CAPACITY)
+    private var presentedTicks =
+        Channel<Unit>(capacity = VapOffscreenGlPipeline.FRAME_CHANNEL_CAPACITY)
     private val inputDone = AtomicBoolean(false)
     private val stopped = AtomicBoolean(false)
+
+
+    private val pendingWindowSurface = AtomicReference<PendingWindowSurface?>(null)
+    private val pendingSwapEnabled = AtomicReference<Boolean?>(null)
 
     private val scope = CoroutineScope(Dispatchers.IO)
     private var decodeJob: Job? = null
@@ -48,6 +61,41 @@ public actual class VapFrameDecoder actual constructor() {
     private val playbackGate = VapPlaybackGate()
     private var displayW = 0
     private var displayH = 0
+
+
+    public fun setOutputMode(mode: VapGlOutputMode) {
+        outputMode = mode
+    }
+
+    public fun attachOutputSurface(surface: Surface, width: Int, height: Int) {
+        val pending = PendingWindowSurface(
+            surface = surface,
+            width = width.coerceAtLeast(1),
+            height = height.coerceAtLeast(1),
+        )
+        pendingWindowSurface.store(pending)
+        glPipeline?.attachOutputSurface(pending.surface, pending.width, pending.height)
+    }
+
+    public fun resizeOutput(width: Int, height: Int) {
+        val w = width.coerceAtLeast(1)
+        val h = height.coerceAtLeast(1)
+        pendingWindowSurface.load()?.let { current ->
+            pendingWindowSurface.store(current.copy(width = w, height = h))
+        }
+        glPipeline?.resizeOutput(w, h)
+    }
+
+    public fun detachOutputSurface() {
+        pendingWindowSurface.store(null)
+        glPipeline?.detachOutputSurface()
+    }
+
+
+    public fun setSwapEnabled(enabled: Boolean) {
+        pendingSwapEnabled.store(enabled)
+        glPipeline?.setSwapEnabled(enabled)
+    }
 
     public actual suspend fun open(source: VapSource, loop: Boolean, fpsOverride: Int?): VapConfig =
         withContext(Dispatchers.IO) {
@@ -72,6 +120,9 @@ public actual class VapFrameDecoder actual constructor() {
         }
 
     public actual suspend fun nextFrame(): VapPlatformFrame? {
+        if (outputMode == VapGlOutputMode.WindowSurface) {
+            error("nextFrame() is not used in WindowSurface mode; call awaitFramePresented()")
+        }
         if (config == null || stopped.load()) return null
         playbackGate.awaitPlaying { stopped.load() }
         if (config == null || stopped.load()) return null
@@ -79,8 +130,22 @@ public actual class VapFrameDecoder actual constructor() {
         return VapPlatformFrame.fromGlFrame(frame)
     }
 
+
+    public suspend fun awaitFramePresented(): Boolean {
+        if (outputMode != VapGlOutputMode.WindowSurface) {
+            error("awaitFramePresented() requires WindowSurface output mode")
+        }
+        if (config == null || stopped.load()) return false
+        playbackGate.awaitPlaying { stopped.load() }
+        if (config == null || stopped.load()) return false
+        return withTimeoutOrNull(3_000L) {
+            presentedTicks.receive()
+            true
+        } ?: false
+    }
+
     public actual fun close() {
-        closeInternal()
+        runBlocking { closeInternal() }
     }
 
     public actual fun setDisplaySize(widthPx: Int, heightPx: Int) {
@@ -95,6 +160,7 @@ public actual class VapFrameDecoder actual constructor() {
         val resumed = playbackGate.setPlaying(playing)
         if (!playing) {
             drainFrameChannel()
+            drainPresentedTicks()
         }
         if (resumed) {
             speedControl.reset()
@@ -103,6 +169,10 @@ public actual class VapFrameDecoder actual constructor() {
 
     private fun applyDisplaySize(cfg: VapConfig, widthPx: Int, heightPx: Int) {
         if (widthPx <= 0 || heightPx <= 0) return
+        if (outputMode == VapGlOutputMode.WindowSurface) {
+
+            return
+        }
         val fitted = VapOutputSize.fit(cfg.width, cfg.height, widthPx, heightPx)
         glPipeline?.setTargetOutputSize(fitted.width, fitted.height)
     }
@@ -113,17 +183,21 @@ public actual class VapFrameDecoder actual constructor() {
         inputDone.store(false)
         glSlots = Semaphore(permits = 1)
         frameChannel = Channel(capacity = VapOffscreenGlPipeline.FRAME_CHANNEL_CAPACITY)
+        presentedTicks = Channel(capacity = VapOffscreenGlPipeline.FRAME_CHANNEL_CAPACITY)
         speedControl.reset()
 
         val pipeline = VapOffscreenGlPipeline(
             config = cfg,
-            frameChannel = frameChannel,
+            outputMode = outputMode,
+            frameChannel = frameChannel.takeIf { outputMode == VapGlOutputMode.HardwareBuffer },
+            presentedTicks = presentedTicks.takeIf { outputMode == VapGlOutputMode.WindowSurface },
             stopped = stopped,
             onFrameComposited = { glSlots.release() },
             maxBufferedFrames = VapOffscreenGlPipeline.FRAME_CHANNEL_CAPACITY,
         )
         check(pipeline.start()) { "Failed to start offscreen GL pipeline" }
         glPipeline = pipeline
+        applyPendingWindowOutput(pipeline)
         val surface = pipeline.codecSurface ?: error("Missing codec surface")
 
         val ext = MediaExtractor()
@@ -229,6 +303,7 @@ public actual class VapFrameDecoder actual constructor() {
         inputDone.store(false)
         speedControl.reset()
         drainFrameChannel()
+        drainPresentedTicks()
     }
 
     private fun drainFrameChannel() {
@@ -238,12 +313,16 @@ public actual class VapFrameDecoder actual constructor() {
         }
     }
 
-    private fun stopPipeline() {
-        stopped.store(true)
-        runBlocking {
-            decodeJob?.cancelAndJoin()
-            decodeJob = null
+    private fun drainPresentedTicks() {
+        while (presentedTicks.tryReceive().isSuccess) {
+
         }
+    }
+
+    private suspend fun stopPipeline() {
+        stopped.store(true)
+        decodeJob?.cancelAndJoin()
+        decodeJob = null
         try {
             codec?.stop()
             codec?.release()
@@ -256,18 +335,28 @@ public actual class VapFrameDecoder actual constructor() {
         drainFrameChannel()
         frameChannel.close()
         drainFrameChannel()
+        drainPresentedTicks()
+        presentedTicks.close()
+        drainPresentedTicks()
 
         val pipeline = glPipeline
         glPipeline = null
-        if (pipeline != null) {
-            Handler(Looper.getMainLooper()).post { pipeline.release() }
+        pipeline?.release()
+    }
+
+    private fun applyPendingWindowOutput(pipeline: VapOffscreenGlPipeline) {
+        if (outputMode != VapGlOutputMode.WindowSurface) return
+        pendingSwapEnabled.load()?.let(pipeline::setSwapEnabled)
+        pendingWindowSurface.load()?.let { pending ->
+            pipeline.attachOutputSurface(pending.surface, pending.width, pending.height)
         }
     }
 
-    private fun closeInternal() {
+    private suspend fun closeInternal() {
         stopPipeline()
         config = null
         loop = false
+
         tempFile?.delete()
         tempFile = null
     }

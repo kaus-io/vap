@@ -4,7 +4,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -16,10 +20,35 @@ public fun VapAnimation(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Fit,
 ) {
+    if (animationState.usesSurfaceHost) {
+        VapSurfaceRenderHost(
+            animationState = animationState,
+            modifier = modifier,
+        )
+    } else {
+        VapCanvasAnimation(
+            animationState = animationState,
+            modifier = modifier,
+            contentScale = contentScale,
+        )
+    }
+}
+
+@Composable
+internal fun VapCanvasAnimation(
+    animationState: VapAnimationState,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Fit,
+) {
     Spacer(
         modifier = modifier
             .onSizeChanged { size ->
                 animationState.setDisplaySize(size.width, size.height)
+            }
+            .onGloballyPositioned { coordinates ->
+                animationState.setDrawInvalidationEnabled(
+                    isComposeNodeVisibleInWindow(coordinates),
+                )
             }
             .drawBehind {
                 animationState.drawGeneration
@@ -82,4 +111,18 @@ public fun VapAnimation(
         modifier = modifier,
         contentScale = contentScale,
     )
+}
+
+
+internal fun isComposeNodeVisibleInWindow(
+    coordinates: androidx.compose.ui.layout.LayoutCoordinates,
+): Boolean {
+    if (!coordinates.isAttached) return true
+    val bounds = coordinates.boundsInWindow()
+    if (bounds.width <= 0f || bounds.height <= 0f) return true
+
+    val root = coordinates.findRootCoordinates().size
+    if (root.width <= 0 || root.height <= 0) return true
+    val window = Rect(0f, 0f, root.width.toFloat(), root.height.toFloat())
+    return bounds.overlaps(window)
 }

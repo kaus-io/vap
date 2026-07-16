@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<resources>
+    <string name="demo_home_title">VAP Cases</string>
+    <string name="demo_home_subtitle">对照 app-hanna 场景测效果与滑动/切态性能</string>
+    <string name="demo_back">返回</string>
+    <string name="demo_empty_assets">无可用 VAP 素材</string>
+    <string name="demo_platform_unavailable">当前平台不支持此 Case（Android Surface）</string>
+
+    <string name="case_home_hero_title">Home Hero</string>
+    <string name="case_home_hero_subtitle">hanna_home · 首页大图循环</string>
+    <string name="case_setting_pager_title">Setting Pager</string>
+    <string name="case_setting_pager_subtitle">about_card · 左右滑测掉帧</string>
+    <string name="case_setting_pager_surface_title">Setting Pager (Surface)</string>
+    <string name="case_setting_pager_surface_subtitle">about_card · Android Surface 直出对照</string>
+    <string name="case_hanna_ball_title">Hanna Ball</string>
+    <string name="case_hanna_ball_subtitle">Idle/Think/Speech · 三态常驻会话</string>
+    <string name="case_window_expand_title">Window Expand</string>
+    <string name="case_window_expand_subtitle">仿 HannaWindow 展开 · 测首帧是否偏晚</string>
+    <string name="case_touch_wake_title">Touch Wake</string>
+    <string name="case_touch_wake_subtitle">圆形悬浮按钮 · touch_wake</string>
+    <string name="case_instance_stress_title">Instance Stress</string>
+    <string name="case_instance_stress_subtitle">Android Surface · 自行加减实例测并发</string>
+
+    <string name="status_playing_asset">playing=%1$s</string>
+    <string name="status_missing_hanna_home">缺少 hanna_home.mp4</string>
+    <string name="status_progress_percent">progress %1$d%%</string>
+    <string name="status_asset">asset=%1$s</string>
+    <string name="status_missing_touch_wake">缺少 hanna_touch_wake</string>
+    <string name="status_hanna_ball_ready">playing=%1$s · 会话常驻</string>
+    <string name="status_hanna_ball_missing">缺少 idle/think/speech 素材</string>
+    <string name="status_setting_pager">page=%1$d/%2$d settled=%3$d · %4$s</string>
+    <string name="status_setting_pager_surface">Surface · page=%1$d/%2$d settled=%3$d · %4$s</string>
+    <string name="status_missing_about_card">缺少 about_card</string>
+    <string name="status_window_expand">target=%1$s current=%2$s playing=%3$s h=%4$ddp · %5$s</string>
+    <string name="status_missing_idle">缺少 idle</string>
+    <string name="status_instance_stress">Surface · asset=%1$s · count=%2$d · %3$dx%4$d 全屏同播</string>
+    <string name="status_no_asset">无素材</string>
+    <string name="status_progress_playing">progress %1$d%% · decoding</string>
+    <string name="status_progress_paused">progress %1$d%% · paused</string>
+
+    <string name="settings_block_wake_lang">唤醒词 / 语言</string>
+    <string name="settings_block_sensitivity">灵敏度</string>
+    <string name="settings_block_volume">音量 / 音色</string>
+    <string name="settings_placeholder_item">占位项 %1$d</string>
+    <string name="settings_page_title">设置页 %1$d</string>
+    <string name="settings_hint_page2_default">左右滑回 page 0 观察靠近 VAP 时的掉帧</string>
+    <string name="settings_hint_page2_surface">对照默认 Setting Pager，观察滑动掉帧</string>
+    <string name="settings_hint_page3_default">about 会话仍在 case 层常驻 isPlaying=true</string>
+    <string name="settings_hint_page3_surface">Surface 直出 · 屏外跳过 eglSwapBuffers</string>
+    <string name="settings_hint_page4">继续远离 VAP 页，再滑回对比帧耗时</string>
+    <string name="settings_hint_page5">末页 · 多页便于拉长滑动路径做压测</string>
+
+    <string name="ball_idle">Idle</string>
+    <string name="ball_think">Think</string>
+    <string name="ball_speech">Speech</string>
+
+    <string name="action_show">Show</string>
+    <string name="action_hide">Hide</string>
+    <string name="gate_hint_like_hanna">对齐 Hanna：展开后才 isPlaying。若动画过半才出图，说明首帧偏晚。</string>
+    <string name="window_collapsed_hint">已收起 · 点 Show 展开</string>
+
+    <string name="stress_minus_one">−1</string>
+    <string name="stress_plus_one">+1</string>
+    <string name="stress_plus_four">+4</string>
+    <string name="stress_clear">清零</string>
+    <string name="stress_empty_hint">点 +1 / +4：Surface 直出格子均分全屏同播</string>
+    <string name="stress_cell_label">#%1$d</string>
+</resources>

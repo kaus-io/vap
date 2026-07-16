@@ -44,7 +44,10 @@ the composition and state above the disposable subtree and only toggle `isPlayin
 ### Recommended: Split (resident, pausable)
 
 ```kotlin
-val composition by rememberVapComposition(VapCompositionSpec.File(pathToMp4))
+// Sync load (local / preload). Or async: rememberVapComposition(...)
+val composition = remember(pathToMp4) {
+    loadVapComposition(VapCompositionSpec.File(pathToMp4))
+}
 val anim = animateVapCompositionAsState(
     composition,
     iterations = VapConstants.IterateForever,
