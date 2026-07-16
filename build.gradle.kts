@@ -37,8 +37,7 @@ configure(subprojects.filter { it.name in publishableModules.toSet() }) {
 
     configure<MavenPublishBaseExtension> {
         publishToMavenCentral()
-        // Signing only when credentials exist; local publishToMavenLocal works without.
-        // signAllPublications()
+        signAllPublications()
 
         coordinates(group.toString(), project.name, version.toString())
 
