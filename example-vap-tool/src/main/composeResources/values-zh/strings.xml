@@ -1,0 +1,28 @@
+<resources>
+    <string name="app_title">VAP 工具</string>
+    <string name="app_subtitle">PNG 序列 → VAP mp4（无音频 / vapx）</string>
+    <string name="input_folder">输入文件夹（0.png / 00.png / 000.png …）</string>
+    <string name="browse">浏览</string>
+    <string name="fps">帧率</string>
+    <string name="scale">缩放（0.5–1）</string>
+    <string name="codec">编码</string>
+    <string name="codec_h264">h264</string>
+    <string name="codec_h265">h265</string>
+    <string name="quality">画质</string>
+    <string name="quality_bitrate">码率</string>
+    <string name="quality_vbr">VBR</string>
+    <string name="quality_crf">crf</string>
+    <string name="crf_value">CRF（0–51）</string>
+    <string name="bitrate_kbps">码率 kbps</string>
+    <string name="vbr_target_kbps">VBR 目标 kbps</string>
+    <string name="vbr_max_kbps">VBR 上限 kbps</string>
+    <string name="ffmpeg_path">ffmpeg 路径</string>
+    <string name="create_vap">生成 VAP</string>
+    <string name="cancel">取消</string>
+    <string name="open_output">打开输出目录</string>
+    <string name="preview_title">VAP 预览</string>
+    <string name="preview_error">预览失败：%1$s</string>
+    <string name="status_done">完成：%1$s</string>
+    <string name="status_error">错误：%1$s</string>
+    <string name="status_cancelled">已取消</string>
+</resources>

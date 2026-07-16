@@ -1,0 +1,28 @@
+<resources>
+    <string name="app_title">VAP Tool</string>
+    <string name="app_subtitle">PNG sequence → VAP mp4 (no audio / vapx)</string>
+    <string name="input_folder">Input folder (0.png / 00.png / 000.png …)</string>
+    <string name="browse">Browse</string>
+    <string name="fps">FPS</string>
+    <string name="scale">Scale (0.5–1)</string>
+    <string name="codec">Codec</string>
+    <string name="codec_h264">h264</string>
+    <string name="codec_h265">h265</string>
+    <string name="quality">Quality</string>
+    <string name="quality_bitrate">bitrate</string>
+    <string name="quality_vbr">vbr</string>
+    <string name="quality_crf">crf</string>
+    <string name="crf_value">CRF (0–51)</string>
+    <string name="bitrate_kbps">Bitrate kbps</string>
+    <string name="vbr_target_kbps">VBR target kbps</string>
+    <string name="vbr_max_kbps">VBR max kbps</string>
+    <string name="ffmpeg_path">ffmpeg path</string>
+    <string name="create_vap">Create VAP</string>
+    <string name="cancel">Cancel</string>
+    <string name="open_output">Open output</string>
+    <string name="preview_title">VAP Preview</string>
+    <string name="preview_error">Preview failed: %1$s</string>
+    <string name="status_done">Done: %1$s</string>
+    <string name="status_error">Error: %1$s</string>
+    <string name="status_cancelled">Cancelled</string>
+</resources>
