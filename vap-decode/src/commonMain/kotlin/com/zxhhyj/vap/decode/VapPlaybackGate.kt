@@ -3,19 +3,37 @@ package com.zxhhyj.vap.decode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 
+/**
+ * Decode advances only when [playing] && [visible] (PAG-style: invisible stops the clock).
+ */
 internal class VapPlaybackGate {
-    private val playing = MutableStateFlow(true)
+    private var playing: Boolean = true
+    private var visible: Boolean = true
+    private val active = MutableStateFlow(true)
 
-    fun isPlaying(): Boolean = playing.value
+    fun isActive(): Boolean = active.value
 
+    /** @return true if transitioned from inactive → active */
     fun setPlaying(value: Boolean): Boolean {
-        val prev = playing.value
-        playing.value = value
-        return value && !prev
+        playing = value
+        return publish()
     }
 
-    suspend fun awaitPlaying(isStopped: () -> Boolean) {
+    /** @return true if transitioned from inactive → active */
+    fun setVisible(value: Boolean): Boolean {
+        visible = value
+        return publish()
+    }
+
+    suspend fun awaitActive(isStopped: () -> Boolean) {
         if (isStopped()) return
-        playing.first { it || isStopped() }
+        active.first { it || isStopped() }
+    }
+
+    private fun publish(): Boolean {
+        val next = playing && visible
+        val prev = active.value
+        active.value = next
+        return next && !prev
     }
 }

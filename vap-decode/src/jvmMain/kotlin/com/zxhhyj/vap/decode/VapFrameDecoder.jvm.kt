@@ -97,6 +97,7 @@ public actual class VapFrameDecoder actual constructor() {
             closeInternal()
             this@VapFrameDecoder.loop = loop
             playbackGate.setPlaying(true)
+            playbackGate.setVisible(true)
             val path = when (source) {
                 is VapSource.AbsolutePath -> source.path
                 is VapSource.Bytes -> {
@@ -110,7 +111,7 @@ public actual class VapFrameDecoder actual constructor() {
             config = parsed
             outW.store(parsed.width.coerceAtLeast(1))
             outH.store(parsed.height.coerceAtLeast(1))
-            speedControl.setFixedPlaybackRate(fpsOverride ?: 0)
+            setTargetFrameRate(fpsOverride ?: 0)
             openFfmpeg(path)
             startDecodeLoop(parsed)
             parsed
@@ -118,7 +119,7 @@ public actual class VapFrameDecoder actual constructor() {
 
     public actual suspend fun nextFrame(): VapPlatformFrame? {
         if (config == null || stopped.load()) return null
-        playbackGate.awaitPlaying { stopped.load() }
+        playbackGate.awaitActive { stopped.load() }
         if (config == null || stopped.load()) return null
         return withTimeoutOrNull(3_000L) { frameChannel.receive() }
     }
@@ -133,8 +134,20 @@ public actual class VapFrameDecoder actual constructor() {
     }
 
     public actual fun setPlaying(playing: Boolean) {
-        val resumed = playbackGate.setPlaying(playing)
-        if (!playing) {
+        applyGateChange(playbackGate.setPlaying(playing))
+    }
+
+    public actual fun setTargetFrameRate(fps: Int) {
+        speedControl.setFixedPlaybackRate(fps.coerceAtLeast(0))
+        if (fps > 0) speedControl.reset()
+    }
+
+    public actual fun setVisible(visible: Boolean) {
+        applyGateChange(playbackGate.setVisible(visible))
+    }
+
+    private fun applyGateChange(resumed: Boolean) {
+        if (!playbackGate.isActive()) {
             while (true) {
                 frameChannel.tryReceive().getOrNull()?.release() ?: break
             }
@@ -142,6 +155,10 @@ public actual class VapFrameDecoder actual constructor() {
         if (resumed) {
             speedControl.reset()
         }
+    }
+
+    public actual fun releaseDecodeSession() {
+        releaseDecodeSessionInternal()
     }
 
     public actual fun close() {
@@ -271,7 +288,7 @@ public actual class VapFrameDecoder actual constructor() {
                     } else {
                         renderedInLoop * 33_333L
                     }
-                    playbackGate.awaitPlaying { stopped.load() }
+                    playbackGate.awaitActive { stopped.load() }
                     if (stopped.load() || !coroutineContext.isActive) return
                     speedControl.preRender(ptsUs)
 
@@ -281,7 +298,7 @@ public actual class VapFrameDecoder actual constructor() {
                         coroutineContext.isActive &&
                         !stopped.load()
                     ) {
-                        playbackGate.awaitPlaying { stopped.load() }
+                        playbackGate.awaitActive { stopped.load() }
                         if (stopped.load() || !coroutineContext.isActive) return
                         frameChannel.tryReceive()
                     }
@@ -345,7 +362,7 @@ public actual class VapFrameDecoder actual constructor() {
         return VapPlatformFrame(image)
     }
 
-    private fun closeInternal() {
+    private fun releaseDecodeSessionInternal() {
         stopped.store(true)
         runBlocking {
             decodeJob?.cancelAndJoin()
@@ -373,6 +390,10 @@ public actual class VapFrameDecoder actual constructor() {
 
         config = null
         loop = false
+    }
+
+    private fun closeInternal() {
+        releaseDecodeSessionInternal()
         tempFile?.delete()
         tempFile = null
     }

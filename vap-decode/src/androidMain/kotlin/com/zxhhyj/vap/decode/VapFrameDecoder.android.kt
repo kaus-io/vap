@@ -61,6 +61,7 @@ public actual class VapFrameDecoder actual constructor() {
     private val playbackGate = VapPlaybackGate()
     private var displayW = 0
     private var displayH = 0
+    private var targetFrameRate: Int = 0
 
 
     public fun setOutputMode(mode: VapGlOutputMode) {
@@ -93,8 +94,7 @@ public actual class VapFrameDecoder actual constructor() {
 
 
     public fun setSwapEnabled(enabled: Boolean) {
-        pendingSwapEnabled.store(enabled)
-        glPipeline?.setSwapEnabled(enabled)
+        setVisible(enabled)
     }
 
     public actual suspend fun open(source: VapSource, loop: Boolean, fpsOverride: Int?): VapConfig =
@@ -102,6 +102,7 @@ public actual class VapFrameDecoder actual constructor() {
             closeInternal()
             this@VapFrameDecoder.loop = loop
             playbackGate.setPlaying(true)
+            playbackGate.setVisible(true)
             val filePath = when (source) {
                 is VapSource.AbsolutePath -> source.path
                 is VapSource.Bytes -> {
@@ -113,7 +114,7 @@ public actual class VapFrameDecoder actual constructor() {
             }
             val parsed = parseMp4File(filePath)
             config = parsed
-            speedControl.setFixedPlaybackRate(fpsOverride ?: 0)
+            setTargetFrameRate(fpsOverride ?: 0)
             startPipeline(filePath, parsed)
             applyDisplaySize(parsed, displayW, displayH)
             parsed
@@ -124,7 +125,7 @@ public actual class VapFrameDecoder actual constructor() {
             error("nextFrame() is not used in WindowSurface mode; call awaitFramePresented()")
         }
         if (config == null || stopped.load()) return null
-        playbackGate.awaitPlaying { stopped.load() }
+        playbackGate.awaitActive { stopped.load() }
         if (config == null || stopped.load()) return null
         val frame = withTimeoutOrNull(3_000L) { frameChannel.receive() } ?: return null
         return VapPlatformFrame.fromGlFrame(frame)
@@ -136,12 +137,20 @@ public actual class VapFrameDecoder actual constructor() {
             error("awaitFramePresented() requires WindowSurface output mode")
         }
         if (config == null || stopped.load()) return false
-        playbackGate.awaitPlaying { stopped.load() }
+        playbackGate.awaitActive { stopped.load() }
         if (config == null || stopped.load()) return false
         return withTimeoutOrNull(3_000L) {
             presentedTicks.receive()
             true
         } ?: false
+    }
+
+    public actual fun releaseDecodeSession() {
+        runBlocking {
+            stopPipeline()
+            config = null
+            loop = false
+        }
     }
 
     public actual fun close() {
@@ -157,13 +166,31 @@ public actual class VapFrameDecoder actual constructor() {
     }
 
     public actual fun setPlaying(playing: Boolean) {
-        val resumed = playbackGate.setPlaying(playing)
-        if (!playing) {
+        applyGateChange(playbackGate.setPlaying(playing))
+    }
+
+    public actual fun setTargetFrameRate(fps: Int) {
+        targetFrameRate = fps.coerceAtLeast(0)
+        speedControl.setFixedPlaybackRate(targetFrameRate)
+        glPipeline?.setTargetFrameRate(targetFrameRate)
+        glPipeline?.resetPresentClock()
+    }
+
+    public actual fun setVisible(visible: Boolean) {
+        pendingSwapEnabled.store(visible)
+        glPipeline?.setSwapEnabled(visible)
+        applyGateChange(playbackGate.setVisible(visible))
+    }
+
+    private fun applyGateChange(resumed: Boolean) {
+        if (!playbackGate.isActive()) {
+            glPipeline?.discardPendingPresent()
             drainFrameChannel()
             drainPresentedTicks()
         }
         if (resumed) {
             speedControl.reset()
+            glPipeline?.resetPresentClock()
         }
     }
 
@@ -196,6 +223,7 @@ public actual class VapFrameDecoder actual constructor() {
             maxBufferedFrames = VapOffscreenGlPipeline.FRAME_CHANNEL_CAPACITY,
         )
         check(pipeline.start()) { "Failed to start offscreen GL pipeline" }
+        pipeline.setTargetFrameRate(targetFrameRate)
         glPipeline = pipeline
         applyPendingWindowOutput(pipeline)
         val surface = pipeline.codecSurface ?: error("Missing codec surface")
@@ -225,10 +253,11 @@ public actual class VapFrameDecoder actual constructor() {
         var renderedInLoop = 0
         try {
             while (coroutineContext.isActive && !stopped.load()) {
-                if (!playbackGate.isPlaying()) {
-                    playbackGate.awaitPlaying { stopped.load() }
+                if (!playbackGate.isActive()) {
+                    playbackGate.awaitActive { stopped.load() }
                     if (stopped.load() || !coroutineContext.isActive) break
                     speedControl.reset()
+                    glPipeline?.resetPresentClock()
                     continue
                 }
 
@@ -254,7 +283,7 @@ public actual class VapFrameDecoder actual constructor() {
                     val eos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     val render = info.size > 0 && !eos
                     if (render) {
-                        if (!playbackGate.isPlaying()) {
+                        if (!playbackGate.isActive()) {
                             codec.releaseOutputBuffer(outIndex, false)
                             continue
                         }
@@ -265,11 +294,15 @@ public actual class VapFrameDecoder actual constructor() {
                                 codec.releaseOutputBuffer(outIndex, false)
                                 break
                             }
-                            if (!playbackGate.isPlaying()) {
+                            if (!playbackGate.isActive()) {
                                 codec.releaseOutputBuffer(outIndex, false)
                                 continue
                             }
-                            speedControl.preRender(info.presentationTimeUs)
+                            // WindowSurface: vsync + PTS gate paces present (no sleep).
+                            // HardwareBuffer: keep sleep-based realtime control.
+                            if (outputMode != VapGlOutputMode.WindowSurface) {
+                                speedControl.preRender(info.presentationTimeUs)
+                            }
                             codec.releaseOutputBuffer(outIndex, true)
                             submittedToGl = true
                             renderedInLoop++
@@ -302,6 +335,8 @@ public actual class VapFrameDecoder actual constructor() {
         codec.flush()
         inputDone.store(false)
         speedControl.reset()
+        glPipeline?.discardPendingPresent()
+        glPipeline?.resetPresentClock()
         drainFrameChannel()
         drainPresentedTicks()
     }

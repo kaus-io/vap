@@ -10,13 +10,16 @@ import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.view.Surface
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.android.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -24,9 +27,14 @@ import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
+/**
+ * Shared EGL + single-thread coroutine dispatcher.
+ * HandlerThread/Handler stay private (SurfaceTexture listener + dispatcher backing only).
+ */
 internal object VapSharedGlRuntime {
     private data class Session(
         val thread: HandlerThread,
+        /** Only for [SurfaceTexture.setOnFrameAvailableListener]; not for app logic. */
         val frameCallbackHandler: Handler,
         val dispatcher: CoroutineDispatcher,
         val scope: CoroutineScope,
@@ -61,20 +69,40 @@ internal object VapSharedGlRuntime {
         }
     }
 
-    fun launch(block: () -> Unit) {
-        val s = session.load() ?: return
-        s.scope.launch(s.dispatcher) {
+    /** Fire-and-forget work on the GL dispatcher (makes pbuffer current first). */
+    fun launchGl(block: suspend CoroutineScope.() -> Unit): Job? {
+        val s = session.load() ?: return null
+        return s.scope.launch(s.dispatcher) {
             if (!makeCurrentPbuffer()) return@launch
             block()
         }
     }
 
-    suspend fun withGl(block: () -> Unit): Boolean {
+    /** Switch to the GL dispatcher and run [block] (suspend-friendly). */
+    suspend fun withGl(block: suspend CoroutineScope.() -> Unit): Boolean {
         val s = session.load() ?: return false
         return withContext(s.dispatcher) {
             if (!makeCurrentPbuffer()) return@withContext false
             block()
             true
+        }
+    }
+
+    /**
+     * Bridge for non-coroutine Android callbacks (e.g. Surface.onDestroyed).
+     * Prefer [withGl] / [launchGl] everywhere else.
+     */
+    fun <T> runGlBlocking(block: suspend CoroutineScope.() -> T): T? {
+        val s = session.load() ?: return null
+        // Avoid deadlock if already on the GL thread.
+        return if (Looper.myLooper() == s.thread.looper) {
+            runBlocking {
+                if (!makeCurrentPbuffer()) null else block()
+            }
+        } else {
+            runBlocking(s.dispatcher) {
+                if (!makeCurrentPbuffer()) null else block()
+            }
         }
     }
 

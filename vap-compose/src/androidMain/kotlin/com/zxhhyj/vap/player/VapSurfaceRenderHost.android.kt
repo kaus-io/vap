@@ -14,7 +14,7 @@ internal actual fun VapSurfaceRenderHost(
     val decoder = animationState.decoder
     AndroidEmbeddedExternalSurface(
         modifier = modifier.onGloballyPositioned { coordinates ->
-            decoder.setSwapEnabled(isComposeNodeVisibleInWindow(coordinates))
+            decoder.setVisible(isComposeNodeVisibleInWindow(coordinates))
         },
         isOpaque = false,
     ) {

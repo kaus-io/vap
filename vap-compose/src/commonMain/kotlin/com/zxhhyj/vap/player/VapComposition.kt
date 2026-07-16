@@ -10,6 +10,7 @@ import com.zxhhyj.vap.decode.VapcParser
 import com.zxhhyj.vap.decode.parseMp4File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 
 @Immutable
@@ -32,6 +33,20 @@ public fun loadVapComposition(spec: VapCompositionSpec): VapComposition {
 public fun loadVapComposition(source: VapSource): VapComposition =
     loadVapComposition(source.toCompositionSpec())
 
+/**
+ * Blocking parse/IO on [Dispatchers.IO], cancellable via [runInterruptible]
+ * (interruptible reads in [parseMp4File] / byte parsing).
+ */
+public suspend fun loadVapCompositionAsync(spec: VapCompositionSpec): VapComposition =
+    withContext(Dispatchers.IO) {
+        runInterruptible {
+            loadVapComposition(spec)
+        }
+    }
+
+public suspend fun loadVapCompositionAsync(source: VapSource): VapComposition =
+    loadVapCompositionAsync(source.toCompositionSpec())
+
 
 @Composable
 public fun rememberVapComposition(
@@ -41,11 +56,9 @@ public fun rememberVapComposition(
     val state = remember(spec) { mutableStateOf<VapComposition?>(null) }
 
     LaunchedEffect(spec) {
-        state.value = null
+        // Keep previous composition while reloading so consumers do not see a null flash.
         try {
-            state.value = withContext(Dispatchers.IO) {
-                loadVapComposition(spec)
-            }
+            state.value = loadVapCompositionAsync(spec)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             state.value = null

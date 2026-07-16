@@ -57,6 +57,8 @@ public class VapAnimationState internal constructor(
     internal fun setDrawInvalidationEnabled(enabled: Boolean) {
         if (drawInvalidationEnabled == enabled) return
         drawInvalidationEnabled = enabled
+        // Canvas path: invisible also stops the decode clock.
+        decoder.setVisible(enabled)
         if (enabled && heldFrame != null) {
             drawGeneration++
         }
@@ -65,6 +67,20 @@ public class VapAnimationState internal constructor(
     public fun syncPlaying(playing: Boolean) {
         isPlaying = playing
         decoder.setPlaying(playing)
+    }
+
+    /**
+     * Target present FPS (PAG-style max/target frame rate).
+     * `0` follows media timestamps; typical UI animation uses `30`.
+     */
+    public fun setTargetFrameRate(fps: Int) {
+        decoder.setTargetFrameRate(fps)
+    }
+
+    /** Drop codec/GL session; composition + this state remain for a later [open] via animate*. */
+    internal fun releaseDecodeSession() {
+        clearFrame()
+        decoder.releaseDecodeSession()
     }
 
     internal fun present(platformFrame: VapPlatformFrame) {
@@ -102,6 +118,9 @@ public class VapAnimationState internal constructor(
 }
 
 @Composable
+/**
+ * @param fps Target present frame rate. `null` follows media PTS; e.g. `30` matches PAG maxFrameRate.
+ */
 public fun animateVapCompositionAsState(
     composition: VapComposition?,
     isPlaying: Boolean = true,
@@ -142,17 +161,23 @@ internal fun animateVapCompositionAsState(
         onDispose { state.close() }
     }
 
-    LaunchedEffect(state, composition, iterations, fps) {
+    // Only the playing instance holds a decode session; standby instances keep composition only.
+    LaunchedEffect(state, composition, iterations, fps, isPlaying) {
         if (composition == null) {
-            state.clearFrame()
+            state.releaseDecodeSession()
             state.publishProgress(0f, force = true)
+            return@LaunchedEffect
+        }
+        if (!isPlaying) {
+            state.syncPlaying(false)
+            state.releaseDecodeSession()
             return@LaunchedEffect
         }
         try {
             withContext(Dispatchers.IO) {
                 state.decoder.open(composition.source, loop = decoderLoop, fpsOverride = fps)
             }
-            state.syncPlaying(isPlaying)
+            state.syncPlaying(true)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             onError?.invoke(t) ?: throw t
@@ -162,43 +187,44 @@ internal fun animateVapCompositionAsState(
         val total = composition.config.totalFrames.coerceAtLeast(1)
         var index = 0
         var playCount = 0
-        while (isActive) {
-            try {
-                when (val advance = state.decoder.advancePresentedFrame(surfaceMode)) {
-                    VapFrameAdvance.Ended -> {
-                        state.publishProgress(1f, force = true)
+        try {
+            while (isActive) {
+                try {
+                    when (val advance = state.decoder.advancePresentedFrame(surfaceMode)) {
+                        VapFrameAdvance.Ended -> {
+                            state.publishProgress(1f, force = true)
+                            onCompleted?.invoke()
+                            break
+                        }
+
+                        is VapFrameAdvance.Bitmap -> state.present(advance.frame)
+
+                        VapFrameAdvance.SurfacePresented -> Unit
+                    }
+                    val atBoundary = index + 1 >= total
+                    state.publishProgress(
+                        value = (index + 1).toFloat() / total,
+                        force = atBoundary || index == 0,
+                    )
+                    if (++index >= total) {
                         onCompleted?.invoke()
-                        break
+                        playCount++
+                        index = when {
+                            loopForever -> 0
+                            playCount >= iterations.coerceAtLeast(1) -> break
+                            else -> 0
+                        }
                     }
-
-                    is VapFrameAdvance.Bitmap -> state.present(advance.frame)
-
-                    VapFrameAdvance.SurfacePresented -> Unit
+                } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
+                    onError?.invoke(t) ?: throw t
+                    break
                 }
-                val atBoundary = index + 1 >= total
-                state.publishProgress(
-                    value = (index + 1).toFloat() / total,
-                    force = atBoundary || index == 0,
-                )
-                if (++index >= total) {
-                    onCompleted?.invoke()
-                    playCount++
-                    index = when {
-                        loopForever -> 0
-                        playCount >= iterations.coerceAtLeast(1) -> break
-                        else -> 0
-                    }
-                }
-            } catch (t: Throwable) {
-                if (t is CancellationException) throw t
-                onError?.invoke(t) ?: throw t
-                break
             }
+        } finally {
+            // Leaving this effect (pause / switch / dispose restart) always frees the codec.
+            state.releaseDecodeSession()
         }
-    }
-
-    LaunchedEffect(state, isPlaying) {
-        state.syncPlaying(isPlaying)
     }
 
     return state

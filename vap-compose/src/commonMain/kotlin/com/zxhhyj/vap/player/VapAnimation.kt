@@ -88,6 +88,9 @@ internal fun VapCanvasAnimation(
 }
 
 @Composable
+/**
+ * @param fps Target present frame rate. `null` follows media PTS; e.g. `30` for UI loops.
+ */
 public fun VapAnimation(
     composition: VapComposition?,
     modifier: Modifier = Modifier,
