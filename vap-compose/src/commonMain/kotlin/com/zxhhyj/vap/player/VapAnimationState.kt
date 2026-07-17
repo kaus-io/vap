@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalAtomicApi::class)
+
 package com.zxhhyj.vap.player
 
 import androidx.compose.runtime.Composable
@@ -9,6 +11,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import com.zxhhyj.vap.decode.VapFrameDecoder
 import com.zxhhyj.vap.decode.VapPlatformFrame
@@ -16,13 +19,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
-import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.TimeSource
+import kotlin.concurrent.atomics.AtomicLong
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
 @Stable
 public class VapAnimationState internal constructor(
     internal val decoder: VapFrameDecoder,
-    internal val presentMode: VapPresentMode,
 ) {
     private var heldFrame: VapPlatformFrame? = null
 
@@ -32,19 +34,42 @@ public class VapAnimationState internal constructor(
     internal var drawGeneration by mutableIntStateOf(0)
         private set
 
+    /**
+     * Playback progress in `0f..1f`.
+     *
+     * Snapshot writes only when the integer percent (`0..100`) changes (or [force]),
+     * so UI that displays percent does not recompose on every present.
+     */
     public var progress: Float by mutableFloatStateOf(0f)
         private set
+
+    /** Last published `0..100` percent; `-1` means never published. */
+    private var publishedProgressPercent: Int = -1
 
     public var isPlaying: Boolean by mutableStateOf(true)
         private set
 
-    private var lastProgressMark = TimeSource.Monotonic.markNow()
+    /**
+     * Successful presents since the last decode [open] (demo / benchmark).
+     *
+     * Not a Compose Snapshot state — updated on the present path without forcing
+     * recomposition. Readers (bench) should poll; the sampling loop already does.
+     */
+    public val presentedCount: Long
+        get() = presentedCountAtomic.load()
 
+    private val presentedCountAtomic = AtomicLong(0L)
 
-    internal val usesSurfaceHost: Boolean
-        get() = presentMode == VapPresentMode.Surface
 
     internal fun currentFrame(): VapPlatformFrame? = heldFrame
+
+    internal fun markPresented() {
+        presentedCountAtomic.addAndFetch(1L)
+    }
+
+    internal fun resetPresentedCount() {
+        presentedCountAtomic.store(0L)
+    }
 
     internal fun setDisplaySize(widthPx: Int, heightPx: Int) {
         decoder.setDisplaySize(widthPx, heightPx)
@@ -70,15 +95,15 @@ public class VapAnimationState internal constructor(
     }
 
     /**
-     * Target present FPS (PAG-style max/target frame rate).
-     * `0` follows media timestamps; typical UI animation uses `30`.
+     * Target present FPS (PAG [maxFrameRate] analogue).
+     * `> 0`: wall-clock logical frame grid (`floor(t * fps)`); `0` follows media PTS.
      */
     public fun setTargetFrameRate(fps: Int) {
         decoder.setTargetFrameRate(fps)
     }
 
     /** Drop codec/GL session; composition + this state remain for a later [open] via animate*. */
-    internal fun releaseDecodeSession() {
+    internal suspend fun releaseDecodeSession() {
         clearFrame()
         decoder.releaseDecodeSession()
     }
@@ -100,10 +125,10 @@ public class VapAnimationState internal constructor(
 
     internal fun publishProgress(value: Float, force: Boolean = false) {
         val clamped = value.coerceIn(0f, 1f)
-        if (!force && lastProgressMark.elapsedNow() < PROGRESS_MIN_INTERVAL) return
-        if (clamped == progress) return
+        val percent = (clamped * 100f).toInt().coerceIn(0, 100)
+        if (!force && percent == publishedProgressPercent) return
+        publishedProgressPercent = percent
         progress = clamped
-        lastProgressMark = TimeSource.Monotonic.markNow()
     }
 
     internal fun close() {
@@ -111,15 +136,11 @@ public class VapAnimationState internal constructor(
         decoder.close()
         publishProgress(0f, force = true)
     }
-
-    private companion object {
-        val PROGRESS_MIN_INTERVAL = 100.milliseconds
-    }
 }
 
 @Composable
 /**
- * @param fps Target present frame rate. `null` follows media PTS; e.g. `30` matches PAG maxFrameRate.
+ * @param fps Target present FPS. `null` follows media PTS; e.g. `30` = PAG-style progress grid.
  */
 public fun animateVapCompositionAsState(
     composition: VapComposition?,
@@ -128,40 +149,21 @@ public fun animateVapCompositionAsState(
     fps: Int? = null,
     onCompleted: (() -> Unit)? = null,
     onError: ((Throwable) -> Unit)? = null,
-): VapAnimationState = animateVapCompositionAsState(
-    composition = composition,
-    isPlaying = isPlaying,
-    iterations = iterations,
-    fps = fps,
-    onCompleted = onCompleted,
-    onError = onError,
-    presentModeOverride = null,
-)
-
-@Composable
-internal fun animateVapCompositionAsState(
-    composition: VapComposition?,
-    isPlaying: Boolean = true,
-    iterations: Int = 1,
-    fps: Int? = null,
-    onCompleted: (() -> Unit)? = null,
-    onError: ((Throwable) -> Unit)? = null,
-    presentModeOverride: VapPresentMode?,
 ): VapAnimationState {
-    val presentMode = currentVapPresentMode(override = presentModeOverride)
-    val state = remember(presentMode) {
-        val decoder = VapFrameDecoder().also { it.configurePresentMode(presentMode) }
-        VapAnimationState(decoder = decoder, presentMode = presentMode)
+    val state = remember {
+        VapAnimationState(decoder = VapFrameDecoder())
     }
     val loopForever = iterations == VapConstants.IterateForever
     val decoderLoop = loopForever || iterations > 1
-    val surfaceMode = state.usesSurfaceHost
+    val currentOnCompleted by rememberUpdatedState(onCompleted)
+    val currentOnError by rememberUpdatedState(onError)
 
     DisposableEffect(state) {
         onDispose { state.close() }
     }
 
     // Only the playing instance holds a decode session; standby instances keep composition only.
+    // Callbacks use rememberUpdatedState so lambda identity changes do not restart decode.
     LaunchedEffect(state, composition, iterations, fps, isPlaying) {
         if (composition == null) {
             state.releaseDecodeSession()
@@ -177,10 +179,12 @@ internal fun animateVapCompositionAsState(
             withContext(Dispatchers.IO) {
                 state.decoder.open(composition.source, loop = decoderLoop, fpsOverride = fps)
             }
+            state.resetPresentedCount()
             state.syncPlaying(true)
+        } catch (e: CancellationException) {
+            throw e
         } catch (t: Throwable) {
-            if (t is CancellationException) throw t
-            onError?.invoke(t) ?: throw t
+            currentOnError?.invoke(t) ?: throw t
             return@LaunchedEffect
         }
 
@@ -190,16 +194,19 @@ internal fun animateVapCompositionAsState(
         try {
             while (isActive) {
                 try {
-                    when (val advance = state.decoder.advancePresentedFrame(surfaceMode)) {
+                    when (val advance = state.decoder.advancePresentedFrame()) {
                         VapFrameAdvance.Ended -> {
                             state.publishProgress(1f, force = true)
-                            onCompleted?.invoke()
+                            currentOnCompleted?.invoke()
                             break
                         }
 
-                        is VapFrameAdvance.Bitmap -> state.present(advance.frame)
+                        is VapFrameAdvance.Bitmap -> {
+                            state.present(advance.frame)
+                            state.markPresented()
+                        }
 
-                        VapFrameAdvance.SurfacePresented -> Unit
+                        VapFrameAdvance.SurfacePresented -> state.markPresented()
                     }
                     val atBoundary = index + 1 >= total
                     state.publishProgress(
@@ -207,7 +214,7 @@ internal fun animateVapCompositionAsState(
                         force = atBoundary || index == 0,
                     )
                     if (++index >= total) {
-                        onCompleted?.invoke()
+                        currentOnCompleted?.invoke()
                         playCount++
                         index = when {
                             loopForever -> 0
@@ -215,9 +222,10 @@ internal fun animateVapCompositionAsState(
                             else -> 0
                         }
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (t: Throwable) {
-                    if (t is CancellationException) throw t
-                    onError?.invoke(t) ?: throw t
+                    currentOnError?.invoke(t) ?: throw t
                     break
                 }
             }

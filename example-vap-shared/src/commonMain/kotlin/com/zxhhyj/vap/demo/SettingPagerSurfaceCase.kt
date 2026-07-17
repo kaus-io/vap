@@ -48,35 +48,33 @@ internal fun SettingPagerSurfaceCase(
             return@DemoCaseScaffold
         }
 
-        VapSurfaceBackendScope {
-            val composition = rememberSyncDemoComposition(clip, onError)
-            val aboutAnim = animateVapCompositionAsState(
-                composition = composition,
-                iterations = VapConstants.IterateForever,
-                isPlaying = true,
-                onError = { onError(it.message ?: it.toString()) },
-            )
+        val composition = rememberSyncDemoComposition(clip, onError)
+        val aboutAnim = animateVapCompositionAsState(
+            composition = composition,
+            iterations = VapConstants.IterateForever,
+            isPlaying = true,
+            onError = { onError(it.message ?: it.toString()) },
+        )
 
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(MaterialTheme.colors.surface),
-            ) { page ->
-                if (page == 0) {
-                    SettingsAboutPage {
-                        VapAnimation(
-                            animationState = aboutAnim,
-                            contentScale = ContentScale.FillBounds,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-                } else {
-                    val (title, hint) = settingsPagerPlainContent(page, surfaceBackend = true)
-                        ?: (stringResource(Res.string.settings_page_title, page + 1) to "")
-                    SettingsPlainPage(title, hint)
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colors.surface),
+        ) { page ->
+            if (page == 0) {
+                SettingsAboutPage {
+                    VapAnimation(
+                        animationState = aboutAnim,
+                        contentScale = ContentScale.FillBounds,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
+            } else {
+                val (title, hint) = settingsPagerPlainContent(page, surfaceBackend = true)
+                    ?: (stringResource(Res.string.settings_page_title, page + 1) to "")
+                SettingsPlainPage(title, hint)
             }
         }
     }

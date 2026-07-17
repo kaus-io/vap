@@ -5,9 +5,7 @@ internal expect val demoSurfaceBackendAvailable: Boolean
 
 internal val DemoCase.isAvailableOnPlatform: Boolean
     get() = when (this) {
-        DemoCase.SettingPagerSurface,
-        DemoCase.InstanceStress,
-            -> demoSurfaceBackendAvailable
+        DemoCase.SettingPagerSurface -> demoSurfaceBackendAvailable
 
         else -> true
     }

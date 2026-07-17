@@ -7,6 +7,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
@@ -43,11 +44,27 @@ internal fun DemoNavHost(
     clips: List<VapDemoClip>,
     onError: (String?) -> Unit,
     modifier: Modifier = Modifier,
+    benchLaunch: PresentBenchLaunch? = null,
+    onBenchFinished: (() -> Unit)? = null,
 ) {
     val backStack = rememberNavBackStack(demoNavConfig, DemoHomeRoute)
     fun popBack() {
         if (backStack.size > 1) {
             backStack.removeLastOrNull()
+        }
+    }
+
+    LaunchedEffect(benchLaunch) {
+        if (benchLaunch == null) return@LaunchedEffect
+        val target = if (benchLaunch.isMulti) {
+            DemoCase.ConcurrentBenchmark
+        } else {
+            DemoCase.PresentBenchmark
+        }
+        val alreadyOpen = backStack.any { it is DemoCaseRoute && it.case == target }
+        if (!alreadyOpen) {
+            onError(null)
+            backStack.add(DemoCaseRoute(target))
         }
     }
 
@@ -87,6 +104,11 @@ internal fun DemoNavHost(
                     onBack = { popBack() },
                     onError = { onError(it) },
                     modifier = Modifier.fillMaxSize(),
+                    benchLaunch = benchLaunch.takeIf {
+                        route.case == DemoCase.PresentBenchmark ||
+                            route.case == DemoCase.ConcurrentBenchmark
+                    },
+                    onBenchFinished = onBenchFinished,
                 )
             }
         },
@@ -100,6 +122,8 @@ private fun DemoCaseContent(
     onBack: () -> Unit,
     onError: (String) -> Unit,
     modifier: Modifier = Modifier,
+    benchLaunch: PresentBenchLaunch? = null,
+    onBenchFinished: (() -> Unit)? = null,
 ) {
     if (!case.isAvailableOnPlatform) {
         DemoCaseScaffold(case = case, onBack = onBack, modifier = modifier) {
@@ -151,11 +175,22 @@ private fun DemoCaseContent(
             modifier = modifier,
         )
 
-        DemoCase.InstanceStress -> InstanceStressCase(
+        DemoCase.PresentBenchmark -> PresentBenchmarkCase(
             clips = clips,
             onBack = onBack,
             onError = onError,
             modifier = modifier,
+            launch = benchLaunch,
+            onAutoFinished = onBenchFinished,
+        )
+
+        DemoCase.ConcurrentBenchmark -> ConcurrentBenchmarkCase(
+            clips = clips,
+            onBack = onBack,
+            onError = onError,
+            modifier = modifier,
+            launch = benchLaunch,
+            onAutoFinished = onBenchFinished,
         )
     }
 }

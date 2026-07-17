@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
+/** Kept for common expect; Android present path is WindowSurface (no Bitmap frames). */
 public actual class VapPlatformFrame internal constructor(
     public val bitmap: Bitmap,
     private val onRelease: () -> Unit,
@@ -17,10 +18,5 @@ public actual class VapPlatformFrame internal constructor(
 
     public actual fun release() {
         if (released.compareAndSet(expectedValue = false, newValue = true)) onRelease()
-    }
-
-    internal companion object {
-        fun fromGlFrame(frame: VapGlFrame): VapPlatformFrame =
-            VapPlatformFrame(frame.bitmap) { frame.release() }
     }
 }

@@ -59,7 +59,7 @@ public actual fun VapSurfaceAnimation(
                 }
             }
             surface.onDestroyed {
-                session.detachOutputSurface()
+                session.detachOutputSurfaceBlocking()
             }
             try {
                 awaitCancellation()

@@ -2,13 +2,7 @@
 
 package com.zxhhyj.vap.decode
 
-import android.graphics.Bitmap
-import android.graphics.ColorSpace
-import android.graphics.PixelFormat
 import android.graphics.SurfaceTexture
-import android.hardware.HardwareBuffer
-import android.media.Image
-import android.media.ImageReader
 import android.opengl.EGL14
 import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
@@ -16,7 +10,6 @@ import android.opengl.GLES20
 import android.view.Surface
 import com.zxhhyj.vap.player.VapConfig
 import com.zxhhyj.vap.player.VapRect
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -27,25 +20,15 @@ import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 
-internal class VapGlFrame(
-    val bitmap: Bitmap,
-    private val onRelease: () -> Unit,
-) {
-    private val released = AtomicBoolean(false)
-
-    fun release() {
-        if (released.compareAndSet(expectedValue = false, newValue = true)) onRelease()
-    }
-}
-
+/**
+ * MediaCodec OES → GLES alpha merge → [eglSwapBuffers] on an attached window Surface.
+ * Present is vsync-gated ([VapVsyncClock]).
+ */
 internal class VapOffscreenGlPipeline(
     private val config: VapConfig,
-    private val outputMode: VapGlOutputMode,
-    private val frameChannel: Channel<VapGlFrame>?,
-    private val presentedTicks: Channel<Unit>?,
+    private val presentedTicks: Channel<Unit>,
     private val stopped: AtomicBoolean,
     private val onFrameComposited: () -> Unit,
-    private val maxBufferedFrames: Int = FRAME_CHANNEL_CAPACITY,
 ) : SurfaceTexture.OnFrameAvailableListener {
 
     private data class Size(val w: Int, val h: Int)
@@ -64,19 +47,12 @@ internal class VapOffscreenGlPipeline(
         val rgb: FloatBuffer,
     )
 
-    private data class HwOutput(
-        val reader: ImageReader,
-        val eglSurface: EGLSurface,
-        val size: Size,
-    )
-
     private data class WindowOutput(
         val eglSurface: EGLSurface,
         val size: Size,
     )
 
     private sealed class FrameSink {
-        data class Hardware(val hw: HwOutput) : FrameSink()
         data class Window(val window: WindowOutput) : FrameSink()
         data object None : FrameSink()
     }
@@ -98,42 +74,33 @@ internal class VapOffscreenGlPipeline(
 
     private val acquired = AtomicBoolean(false)
     private val gl = AtomicReference<GlState?>(null)
-    private val bufferedFrames = AtomicInt(0)
-    private val targetOut = AtomicReference(
-        Size(config.width.coerceAtLeast(1), config.height.coerceAtLeast(1)),
-    )
     private val pendingWindow = AtomicReference<WindowRequest?>(null)
     private val swapEnabled = AtomicBoolean(true)
-    /** WindowSurface: texture updated, waiting for vsync (+ PTS) to composite/swap. */
+    /** Texture updated, waiting for vsync (+ PTS / target FPS) to composite/swap. */
     private val pendingPresent = AtomicBoolean(false)
-    private val vsyncJob = AtomicReference<Job?>(null)
-    /** Anchors media PTS ([SurfaceTexture.getTimestamp]) to Choreographer timebase. */
+    /**
+     * True while this pipeline still owes [onFrameComposited] for the decode slot acquired
+     * before the current pending frame. Cleared on present, discard, or A2 early release.
+     */
+    private val decodeSlotHeld = AtomicBoolean(false)
+    private val vsyncRegistered = AtomicBoolean(false)
     private val playStartMonoNs = AtomicLong(0L)
     private val playStartPtsNs = AtomicLong(0L)
-    /** When > 0, present at most this often (target / max FPS). */
-    private val targetFrameIntervalNs = AtomicLong(0L)
-    private val lastPresentMonoNs = AtomicLong(0L)
-    /**
-     * Bumped on every window attach/detach/resize apply.
-     * Present aborts if the epoch changes mid-flush (surface teardown vs swap).
-     */
+    /** `> 0`: PAG-style wall-clock frame grid (see [isFrameDue]); `0`: follow media PTS. */
+    private val targetFps = AtomicInt(0)
+    /** Last presented logical frame index when [targetFps] > 0; `-1` = none yet. */
+    private val lastPresentedLogicalFrame = AtomicLong(-1L)
     private val surfaceEpoch = AtomicInt(0)
 
     val codecSurface: Surface?
         get() = gl.load()?.codecSurface
 
-    fun setTargetOutputSize(width: Int, height: Int) {
-        targetOut.store(Size(width.coerceAtLeast(1), height.coerceAtLeast(1)))
-    }
-
     fun setSwapEnabled(enabled: Boolean) {
         swapEnabled.store(enabled)
-        if (outputMode != VapGlOutputMode.WindowSurface) return
         if (enabled) {
             registerVsync()
         } else {
             unregisterVsync()
-            // Wait until any in-flight present finishes, then drop pending (PAG renderLock).
             VapSharedGlRuntime.runGlBlocking {
                 discardPendingPresentLocked(notify = false)
             }
@@ -141,31 +108,31 @@ internal class VapOffscreenGlPipeline(
     }
 
     fun attachOutputSurface(surface: Surface, width: Int, height: Int) {
-        if (outputMode != VapGlOutputMode.WindowSurface) return
         pendingWindow.store(
             WindowRequest.Attach(
                 surface = surface,
                 size = Size(width.coerceAtLeast(1), height.coerceAtLeast(1)),
             ),
         )
-        // Attach can stay async; vsync/present always applies pending first.
         VapSharedGlRuntime.launchGl { applyPendingWindowRequest() }
     }
 
     fun resizeOutput(width: Int, height: Int) {
-        if (outputMode != VapGlOutputMode.WindowSurface) return
         pendingWindow.store(
             WindowRequest.Resize(Size(width.coerceAtLeast(1), height.coerceAtLeast(1))),
         )
         VapSharedGlRuntime.launchGl { applyPendingWindowRequest() }
     }
 
-    /**
-     * Detach must finish on the GL thread before the framework destroys the Surface
-     * (serializes with present/flush — same intent as PAGView.renderLock).
-     */
-    fun detachOutputSurface() {
-        if (outputMode != VapGlOutputMode.WindowSurface) return
+    suspend fun detachOutputSurface() {
+        pendingWindow.store(WindowRequest.Detach)
+        VapSharedGlRuntime.withGl {
+            discardPendingPresentLocked(notify = false)
+            applyPendingWindowRequest()
+        }
+    }
+
+    fun detachOutputSurfaceBlocking() {
         pendingWindow.store(WindowRequest.Detach)
         VapSharedGlRuntime.runGlBlocking {
             discardPendingPresentLocked(notify = false)
@@ -193,9 +160,7 @@ internal class VapOffscreenGlPipeline(
             return false
         }
         gl.store(state)
-        if (outputMode == VapGlOutputMode.WindowSurface) {
-            registerVsync()
-        }
+        registerVsync()
         return true
     }
 
@@ -209,25 +174,25 @@ internal class VapOffscreenGlPipeline(
         VapSharedGlRuntime.release()
     }
 
-    /** Drop a vsync-pending frame and release the decode slot (pause / seek / teardown). */
     fun discardPendingPresent() {
         VapSharedGlRuntime.runGlBlocking {
             discardPendingPresentLocked(notify = false)
         }
     }
 
-    /** Reset realtime anchor after pause / loop seek (same role as [VapSpeedControl.reset]). */
     fun resetPresentClock() {
         playStartMonoNs.set(0L)
         playStartPtsNs.set(0L)
-        lastPresentMonoNs.set(0L)
+        lastPresentedLogicalFrame.set(-1L)
     }
 
-    /** Target present FPS; `<= 0` follows media PTS only. */
+    /**
+     * Target present FPS (PAG [maxFrameRate] analogue).
+     * `> 0`: present only when wall-clock logical frame index advances (`floor(t * fps)`).
+     * `<= 0`: follow media PTS.
+     */
     fun setTargetFrameRate(fps: Int) {
-        targetFrameIntervalNs.set(
-            if (fps <= 0) 0L else 1_000_000_000L / fps.coerceAtLeast(1).toLong(),
-        )
+        targetFps.store(fps.coerceAtLeast(0))
     }
 
     override fun onFrameAvailable(surfaceTexture: SurfaceTexture?) {
@@ -235,48 +200,41 @@ internal class VapOffscreenGlPipeline(
     }
 
     private fun registerVsync() {
-        while (true) {
-            val current = vsyncJob.load()
-            if (current?.isActive == true) return
-            VapVsyncClock.addSubscriber()
-            val job = VapSharedGlRuntime.launchGl {
-                try {
-                    VapVsyncClock.ticks.collect { frameTimeNanos ->
-                        onVsync(frameTimeNanos)
-                    }
-                } finally {
-                    VapVsyncClock.removeSubscriber()
-                }
-            }
-            if (job == null) {
-                VapVsyncClock.removeSubscriber()
-                return
-            }
-            if (vsyncJob.compareAndSet(current, job)) {
-                current?.cancel()
-                return
-            }
-            job.cancel()
-        }
+        if (vsyncRegistered.load()) return
+        if (!VapVsyncClock.register(this)) return
+        vsyncRegistered.store(true)
     }
 
     private fun unregisterVsync() {
-        vsyncJob.exchange(null)?.cancel()
+        if (!vsyncRegistered.compareAndSet(expectedValue = true, newValue = false)) return
+        VapVsyncClock.unregister(this)
+    }
+
+    /** Invoked from the process-wide GL vsync dispatcher ([VapVsyncClock]). */
+    internal fun onVsyncTick(frameTimeNanos: Long) {
+        onVsync(frameTimeNanos)
     }
 
     private fun discardPendingPresentLocked(notify: Boolean) {
         if (!pendingPresent.exchange(false)) return
-        onFrameComposited()
+        releaseDecodeSlotLocked()
         if (notify) notifyPresented()
     }
 
+    /** Release the MediaCodec/GL slot at most once per pending frame. */
+    private fun releaseDecodeSlotLocked() {
+        if (decodeSlotHeld.compareAndSet(expectedValue = true, newValue = false)) {
+            onFrameComposited()
+        }
+    }
+
     /**
-     * Vsync-gated present for WindowSurface (scheme A).
-     * Holds the decode slot until a due frame is swapped — at most one composite per vsync.
+     * At most one swap per vsync when due.
+     * A2: if a frame is pending but not yet due, release the decode slot immediately while
+     * keeping [pendingPresent] so a later vsync can still present (newer textures may overwrite).
      */
     private fun onVsync(frameTimeNanos: Long) {
         if (stopped.load()) return
-        if (outputMode != VapGlOutputMode.WindowSurface) return
         if (!pendingPresent.load()) return
 
         applyPendingWindowRequest()
@@ -288,41 +246,46 @@ internal class VapOffscreenGlPipeline(
         }
 
         val ptsNs = state.surfaceTexture.timestamp
-        if (!isFrameDue(frameTimeNanos, ptsNs)) {
+        // One load per vsync tick — shared by due-check, A2, and logical-frame stamp.
+        val fps = targetFps.load()
+        if (!isFrameDue(frameTimeNanos, ptsNs, fps)) {
+            // A2 only for wall-clock FPS grids: release the decode slot while waiting for the
+            // next cell so decode can run ahead. PTS mode must keep the slot — otherwise the
+            // texture timestamp races into the future and the frame never becomes due.
+            if (fps > 0) {
+                releaseDecodeSlotLocked()
+            }
             return
         }
         if (!pendingPresent.compareAndSet(expectedValue = true, newValue = false)) return
 
-        // Surface detached/replaced after we claimed the frame — do not swap a dead window.
         if (surfaceEpoch.load() != epochAtStart) {
-            onFrameComposited()
+            releaseDecodeSlotLocked()
             return
         }
 
         val sink = state.sink
         if (sink is FrameSink.Window && swapEnabled.load()) {
             if (!drawToWindowSurface(state, sink.window)) {
-                // EGL window already invalid — free decode slot, skip notify.
-                onFrameComposited()
+                releaseDecodeSlotLocked()
                 return
             }
-            lastPresentMonoNs.set(frameTimeNanos)
         }
-        onFrameComposited()
+        if (fps > 0) {
+            lastPresentedLogicalFrame.set(logicalFrameIndex(frameTimeNanos, fps))
+        }
+        releaseDecodeSlotLocked()
         notifyPresented()
     }
 
-    private fun isFrameDue(frameTimeNanos: Long, ptsNs: Long): Boolean {
-        val targetInterval = targetFrameIntervalNs.get()
-        if (targetInterval > 0L) {
-            val lastPresent = lastPresentMonoNs.get()
-            if (lastPresent != 0L &&
-                frameTimeNanos + PRESENT_EARLY_NS < lastPresent + targetInterval
-            ) {
-                return false
+    private fun isFrameDue(frameTimeNanos: Long, ptsNs: Long, fps: Int): Boolean {
+        if (fps > 0) {
+            // PAG-style maxFrameRate: quantize wall clock onto an fps grid; same cell → not due.
+            if (playStartMonoNs.get() == 0L) {
+                playStartMonoNs.set(frameTimeNanos)
+                return true
             }
-            // Target FPS paces wall-clock presents; media PTS is not required.
-            return true
+            return logicalFrameIndex(frameTimeNanos, fps) > lastPresentedLogicalFrame.get()
         }
 
         if (ptsNs <= 0L) return true
@@ -333,55 +296,47 @@ internal class VapOffscreenGlPipeline(
             return true
         }
         val startPts = playStartPtsNs.get()
-        // Loop / seek: PTS jumped backwards — re-anchor.
+        // Loop rewind or broken/jumped media timestamps → resync.
         if (ptsNs + PRESENT_EARLY_NS < startPts) {
             playStartMonoNs.set(frameTimeNanos)
             playStartPtsNs.set(ptsNs)
             return true
         }
-        val dueMono = startMono + (ptsNs - startPts)
+        val ptsDelta = ptsNs - startPts
+        val monoElapsed = frameTimeNanos - startMono
+        if (ptsDelta > monoElapsed + 1_000_000_000L) {
+            playStartMonoNs.set(frameTimeNanos)
+            playStartPtsNs.set(ptsNs)
+            return true
+        }
+        val dueMono = startMono + ptsDelta
         return frameTimeNanos + PRESENT_EARLY_NS >= dueMono
+    }
+
+    /** `floor((t - start + early) * fps / 1e9)` — early absorbs vsync jitter into the next cell. */
+    private fun logicalFrameIndex(frameTimeNanos: Long, fps: Int): Long {
+        val startMono = playStartMonoNs.get()
+        if (startMono == 0L) return 0L
+        val elapsed = (frameTimeNanos - startMono + PRESENT_EARLY_NS).coerceAtLeast(0L)
+        return elapsed * fps.toLong() / 1_000_000_000L
     }
 
     private fun compositeAvailableFrames() {
         if (stopped.load()) return
         applyPendingWindowRequest()
         val state = gl.load() ?: return
-        var permitReleased = false
         try {
             if (!updateTexImage(state)) return
-
-            when (outputMode) {
-                VapGlOutputMode.HardwareBuffer -> {
-                    if (bufferedFrames.load() >= maxBufferedFrames) {
-                        onFrameComposited()
-                        return
-                    }
-                    val current = ensureHardwareSink(state)
-                    val hw = (current.sink as FrameSink.Hardware).hw
-                    val frame = drawToHardwareBuffer(current, hw)
-                        ?: error("VAP hardware composite failed")
-                    onFrameComposited()
-                    permitReleased = true
-                    if (stopped.load()) {
-                        frame.release()
-                        return
-                    }
-                    offerFrame(frame)
-                }
-
-                VapGlOutputMode.WindowSurface -> {
-                    // Consume decoder output into the OES texture; swap on vsync.
-                    // Decode slot stays held until onVsync / discardPendingPresent.
-                    pendingPresent.store(true)
-                }
-            }
+            // Consume decoder output into the OES texture; swap on a due vsync.
+            pendingPresent.store(true)
+            // Decoder already acquired glSlots for this frame; we own the matching release.
+            decodeSlotHeld.store(true)
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
-            if (!permitReleased) onFrameComposited()
+            releaseDecodeSlotLocked()
             throw e
         } catch (e: Throwable) {
-            if (!permitReleased) onFrameComposited()
+            releaseDecodeSlotLocked()
             throw e
         }
     }
@@ -391,64 +346,15 @@ internal class VapOffscreenGlPipeline(
             state.surfaceTexture.updateTexImage()
             true
         } catch (e: Exception) {
+            // Slot still owned by decoder acquire; we have not set decodeSlotHeld yet.
             onFrameComposited()
             if (stopped.load()) return false
             throw e
         }
     }
 
-    private fun offerFrame(frame: VapGlFrame) {
-        val channel = frameChannel ?: run {
-            frame.release()
-            return
-        }
-        while (!channel.trySend(frame).isSuccess) {
-            val dropped = channel.tryReceive().getOrNull()
-            if (dropped == null) {
-                frame.release()
-                return
-            }
-            dropped.release()
-        }
-    }
-
     private fun notifyPresented() {
-        presentedTicks?.trySend(Unit)
-    }
-
-    private fun trackBufferedFrame(bitmap: Bitmap, onRelease: () -> Unit): VapGlFrame {
-        bufferedFrames.fetchAndAdd(1)
-        return VapGlFrame(bitmap) {
-            bufferedFrames.fetchAndAdd(-1)
-            onRelease()
-        }
-    }
-
-    private fun drawToHardwareBuffer(state: GlState, hw: HwOutput): VapGlFrame? {
-        val w = hw.size.w
-        val h = hw.size.h
-        if (w <= 0 || h <= 0) return null
-        if (!VapSharedGlRuntime.makeCurrent(hw.eglSurface)) return null
-
-        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
-        drawVapQuad(state, w, h)
-        if (!VapSharedGlRuntime.swapBuffers(hw.eglSurface)) return null
-
-        val image = acquireLatestImage(hw.reader) ?: return null
-        val hardwareBuffer = image.hardwareBuffer
-        if (hardwareBuffer == null) {
-            image.close()
-            return null
-        }
-
-        val bitmap = try {
-            Bitmap.wrapHardwareBuffer(hardwareBuffer, SrgbColorSpace)
-        } finally {
-            hardwareBuffer.close()
-            image.close()
-        } ?: return null
-
-        return trackBufferedFrame(bitmap) { bitmap.recycle() }
+        presentedTicks.trySend(Unit)
     }
 
     private fun drawToWindowSurface(state: GlState, window: WindowOutput): Boolean {
@@ -461,35 +367,9 @@ internal class VapOffscreenGlPipeline(
         return VapSharedGlRuntime.swapBuffers(window.eglSurface)
     }
 
-    private fun acquireLatestImage(reader: ImageReader): Image? {
-        var latest: Image? = null
-        try {
-            while (true) {
-                val next = reader.acquireLatestImage() ?: break
-                latest?.close()
-                latest = next
-            }
-        } catch (e: IllegalStateException) {
-            latest?.close()
-            if (stopped.load()) return null
-            throw e
-        }
-        return latest
-    }
-
-    private fun ensureHardwareSink(state: GlState): GlState {
-        val wanted = targetOut.load()
-        val current = state.sink as? FrameSink.Hardware
-        if (current != null && current.hw.size == wanted) return state
-        if (current != null) releaseHardware(current.hw)
-        val updated =
-            state.copy(sink = FrameSink.Hardware(createHardwareOutput(wanted.w, wanted.h)))
-        gl.store(updated)
-        return updated
-    }
-
     private fun applyPendingWindowRequest() {
-        if (outputMode != VapGlOutputMode.WindowSurface) return
+        // Fast path: avoid exchange write-barrier when no attach/resize/detach is pending.
+        if (pendingWindow.load() == null) return
         val request = pendingWindow.exchange(null) ?: return
         val state = gl.load() ?: return
         when (request) {
@@ -509,23 +389,22 @@ internal class VapOffscreenGlPipeline(
                     GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
                     VapSharedGlRuntime.swapBuffers(eglSurface)
                 }
+                // Keep window current — next updateTexImage/present can skip makeCurrent.
                 gl.store(state.copy(sink = FrameSink.Window(window)))
-                VapSharedGlRuntime.makeCurrentPbuffer()
                 surfaceEpoch.fetchAndAdd(1)
             }
 
             is WindowRequest.Resize -> {
                 val window = (state.sink as? FrameSink.Window)?.window ?: return
                 if (window.size == request.size) return
-
                 gl.store(state.copy(sink = FrameSink.Window(window.copy(size = request.size))))
                 surfaceEpoch.fetchAndAdd(1)
             }
 
             WindowRequest.Detach -> {
+                // destroySurface switches off this window if it was current.
                 releaseSink(state.sink)
                 gl.store(state.copy(sink = FrameSink.None))
-                VapSharedGlRuntime.makeCurrentPbuffer()
                 surfaceEpoch.fetchAndAdd(1)
             }
         }
@@ -550,22 +429,13 @@ internal class VapOffscreenGlPipeline(
             return null
         }
 
-        val sink = when (outputMode) {
-            VapGlOutputMode.HardwareBuffer -> {
-                val size = targetOut.load()
-                FrameSink.Hardware(createHardwareOutput(size.w, size.h))
-            }
-
-            VapGlOutputMode.WindowSurface -> FrameSink.None
-        }
-
         return GlState(
             oesTextureId = oesTextureId,
             surfaceTexture = surfaceTexture,
             codecSurface = codecSurface,
             shader = bindShader(programId),
             mesh = createMesh(),
-            sink = sink,
+            sink = FrameSink.None,
         )
     }
 
@@ -583,34 +453,12 @@ internal class VapOffscreenGlPipeline(
         rgb = floatBuffer(texCoords(config.videoWidth, config.videoHeight, config.rgbFrame)),
     )
 
-    private fun createHardwareOutput(w: Int, h: Int): HwOutput {
-        val usage = HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or
-                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE
-        if (!HardwareBuffer.isSupported(w, h, HardwareBuffer.RGBA_8888, 1, usage)) {
-            error("HardwareBuffer not supported for ${w}x$h RGBA_8888")
-        }
-        @Suppress("WrongConstant")
-        val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 3, usage)
-        val window = VapSharedGlRuntime.createWindowSurface(reader.surface)
-        if (window == EGL14.EGL_NO_SURFACE) {
-            reader.close()
-            error("Failed to create EGL window surface for ImageReader ${w}x$h")
-        }
-        return HwOutput(reader, window, Size(w, h))
-    }
-
-    private fun releaseHardware(output: HwOutput) {
-        VapSharedGlRuntime.destroySurface(output.eglSurface)
-        output.reader.close()
-    }
-
     private fun releaseWindow(output: WindowOutput) {
         VapSharedGlRuntime.destroySurface(output.eglSurface)
     }
 
     private fun releaseSink(sink: FrameSink) {
         when (sink) {
-            is FrameSink.Hardware -> releaseHardware(sink.hw)
             is FrameSink.Window -> releaseWindow(sink.window)
             FrameSink.None -> Unit
         }
@@ -638,9 +486,10 @@ internal class VapOffscreenGlPipeline(
         VapSharedGlRuntime.setOnFrameAvailableListener(state.surfaceTexture, null)
         state.surfaceTexture.release()
         releaseSink(state.sink)
+        // Ensure a valid surface before deleting GL objects (window may have been destroyed).
+        VapSharedGlRuntime.ensureContextCurrent()
         GLES20.glDeleteTextures(1, intArrayOf(state.oesTextureId), 0)
         GLES20.glDeleteProgram(state.shader.program)
-        VapSharedGlRuntime.makeCurrentPbuffer()
     }
 
     private fun genOesTexture(): Int {
@@ -682,8 +531,6 @@ internal class VapOffscreenGlPipeline(
 
         /** Allow presenting slightly before PTS to absorb vsync jitter (~half frame @60Hz). */
         private const val PRESENT_EARLY_NS = 8_000_000L
-
-        private val SrgbColorSpace: ColorSpace = ColorSpace.get(ColorSpace.Named.SRGB)
 
         private val FULL_SCREEN_QUAD = floatArrayOf(
             -1f, 1f,

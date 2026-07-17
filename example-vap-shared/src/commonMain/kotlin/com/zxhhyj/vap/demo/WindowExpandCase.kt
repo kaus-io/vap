@@ -37,10 +37,32 @@ import com.zxhhyj.example_vap_shared.generated.resources.status_progress_playing
 import com.zxhhyj.example_vap_shared.generated.resources.status_window_expand
 import com.zxhhyj.example_vap_shared.generated.resources.window_collapsed_hint
 import com.zxhhyj.vap.player.VapAnimation
+import com.zxhhyj.vap.player.VapAnimationState
 import com.zxhhyj.vap.player.VapConstants
 import com.zxhhyj.vap.player.VapDemoClip
 import com.zxhhyj.vap.player.animateVapCompositionAsState
 import org.jetbrains.compose.resources.stringResource
+
+/** Reads playing/progress only here so the expand panel / VapAnimation can skip. */
+@Composable
+private fun WindowExpandProgressLabel(
+    anim: VapAnimationState,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        text = stringResource(
+            if (anim.isPlaying) {
+                Res.string.status_progress_playing
+            } else {
+                Res.string.status_progress_paused
+            },
+            (anim.progress * 100).toInt(),
+        ),
+        color = MaterialTheme.colors.onBackground.copy(alpha = 0.5f),
+        fontSize = 12.sp,
+        modifier = modifier,
+    )
+}
 
 private const val EXPAND_MS = 500
 private val ExpandEasing = CubicBezierEasing(0.04f, 0.34f, 0.94f, 1.0f)
@@ -171,18 +193,7 @@ internal fun WindowExpandCase(
                 }
             }
 
-            Text(
-                text = stringResource(
-                    if (anim.isPlaying) {
-                        Res.string.status_progress_playing
-                    } else {
-                        Res.string.status_progress_paused
-                    },
-                    (anim.progress * 100).toInt(),
-                ),
-                color = MaterialTheme.colors.onBackground.copy(alpha = 0.5f),
-                fontSize = 12.sp,
-            )
+            WindowExpandProgressLabel(anim = anim)
         }
     }
 }

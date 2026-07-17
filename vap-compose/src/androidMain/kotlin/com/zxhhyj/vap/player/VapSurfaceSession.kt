@@ -9,31 +9,33 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import com.zxhhyj.vap.decode.VapFrameDecoder
-import com.zxhhyj.vap.decode.VapGlOutputMode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
-import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.TimeSource
 
 /**
- * Session for [VapGlOutputMode.WindowSurface]: decode + GLES composite + eglSwapBuffers
+ * Session for Android Surface present: decode + GLES composite + eglSwapBuffers
  * into a Compose Embedded External Surface.
  */
 @Stable
 public class VapSurfaceSession internal constructor(
     internal val decoder: VapFrameDecoder,
 ) {
+    /**
+     * Playback progress in `0f..1f`.
+     * Snapshot writes only when the integer percent (`0..100`) changes (or force).
+     */
     public var progress: Float by mutableFloatStateOf(0f)
         private set
 
+    private var publishedProgressPercent: Int = -1
+
     public var isPlaying: Boolean by mutableStateOf(true)
         private set
-
-    private var lastProgressMark = TimeSource.Monotonic.markNow()
 
     public fun attachOutputSurface(surface: Surface, width: Int, height: Int) {
         decoder.attachOutputSurface(surface, width, height)
@@ -43,8 +45,12 @@ public class VapSurfaceSession internal constructor(
         decoder.resizeOutput(width, height)
     }
 
-    public fun detachOutputSurface() {
+    public suspend fun detachOutputSurface() {
         decoder.detachOutputSurface()
+    }
+
+    public fun detachOutputSurfaceBlocking() {
+        decoder.detachOutputSurfaceBlocking()
     }
 
     public fun setSwapEnabled(enabled: Boolean) {
@@ -67,13 +73,13 @@ public class VapSurfaceSession internal constructor(
 
     internal fun publishProgress(value: Float, force: Boolean = false) {
         val clamped = value.coerceIn(0f, 1f)
-        if (!force && lastProgressMark.elapsedNow() < PROGRESS_MIN_INTERVAL) return
-        if (clamped == progress) return
+        val percent = (clamped * 100f).toInt().coerceIn(0, 100)
+        if (!force && percent == publishedProgressPercent) return
+        publishedProgressPercent = percent
         progress = clamped
-        lastProgressMark = TimeSource.Monotonic.markNow()
     }
 
-    internal fun releaseDecodeSession() {
+    internal suspend fun releaseDecodeSession() {
         decoder.releaseDecodeSession()
         publishProgress(0f, force = true)
     }
@@ -81,10 +87,6 @@ public class VapSurfaceSession internal constructor(
     public fun close() {
         decoder.close()
         publishProgress(0f, force = true)
-    }
-
-    private companion object {
-        val PROGRESS_MIN_INTERVAL = 100.milliseconds
     }
 }
 
@@ -98,17 +100,18 @@ internal fun animateVapSurfaceSessionAsState(
     onError: ((Throwable) -> Unit)? = null,
 ): VapSurfaceSession {
     val session = remember {
-        VapSurfaceSession(
-            VapFrameDecoder().also { it.setOutputMode(VapGlOutputMode.WindowSurface) },
-        )
+        VapSurfaceSession(VapFrameDecoder())
     }
     val loopForever = iterations == VapConstants.IterateForever
     val decoderLoop = loopForever || iterations > 1
+    val currentOnCompleted by rememberUpdatedState(onCompleted)
+    val currentOnError by rememberUpdatedState(onError)
 
     DisposableEffect(session) {
         onDispose { session.close() }
     }
 
+    // Callbacks use rememberUpdatedState so lambda identity changes do not restart decode.
     LaunchedEffect(session, composition, iterations, fps, isPlaying) {
         if (composition == null) {
             session.releaseDecodeSession()
@@ -124,9 +127,10 @@ internal fun animateVapSurfaceSessionAsState(
                 session.decoder.open(composition.source, loop = decoderLoop, fpsOverride = fps)
             }
             session.syncPlaying(true)
+        } catch (e: CancellationException) {
+            throw e
         } catch (t: Throwable) {
-            if (t is CancellationException) throw t
-            onError?.invoke(t) ?: throw t
+            currentOnError?.invoke(t) ?: throw t
             return@LaunchedEffect
         }
 
@@ -139,7 +143,7 @@ internal fun animateVapSurfaceSessionAsState(
                     val presented = session.decoder.awaitFramePresented()
                     if (!presented) {
                         session.publishProgress(1f, force = true)
-                        onCompleted?.invoke()
+                        currentOnCompleted?.invoke()
                         break
                     }
                     val atBoundary = index + 1 >= total
@@ -148,7 +152,7 @@ internal fun animateVapSurfaceSessionAsState(
                         force = atBoundary || index == 0,
                     )
                     if (++index >= total) {
-                        onCompleted?.invoke()
+                        currentOnCompleted?.invoke()
                         playCount++
                         index = when {
                             loopForever -> 0
@@ -156,9 +160,10 @@ internal fun animateVapSurfaceSessionAsState(
                             else -> 0
                         }
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (t: Throwable) {
-                    if (t is CancellationException) throw t
-                    onError?.invoke(t) ?: throw t
+                    currentOnError?.invoke(t) ?: throw t
                     break
                 }
             }

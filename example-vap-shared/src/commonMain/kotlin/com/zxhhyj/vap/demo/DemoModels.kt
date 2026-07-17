@@ -9,14 +9,16 @@ import com.zxhhyj.example_vap_shared.generated.resources.case_hanna_ball_subtitl
 import com.zxhhyj.example_vap_shared.generated.resources.case_hanna_ball_title
 import com.zxhhyj.example_vap_shared.generated.resources.case_home_hero_subtitle
 import com.zxhhyj.example_vap_shared.generated.resources.case_home_hero_title
-import com.zxhhyj.example_vap_shared.generated.resources.case_instance_stress_subtitle
-import com.zxhhyj.example_vap_shared.generated.resources.case_instance_stress_title
 import com.zxhhyj.example_vap_shared.generated.resources.case_setting_pager_subtitle
 import com.zxhhyj.example_vap_shared.generated.resources.case_setting_pager_surface_subtitle
 import com.zxhhyj.example_vap_shared.generated.resources.case_setting_pager_surface_title
 import com.zxhhyj.example_vap_shared.generated.resources.case_setting_pager_title
 import com.zxhhyj.example_vap_shared.generated.resources.case_touch_wake_subtitle
 import com.zxhhyj.example_vap_shared.generated.resources.case_touch_wake_title
+import com.zxhhyj.example_vap_shared.generated.resources.case_concurrent_benchmark_subtitle
+import com.zxhhyj.example_vap_shared.generated.resources.case_concurrent_benchmark_title
+import com.zxhhyj.example_vap_shared.generated.resources.case_present_benchmark_subtitle
+import com.zxhhyj.example_vap_shared.generated.resources.case_present_benchmark_title
 import com.zxhhyj.example_vap_shared.generated.resources.case_window_expand_subtitle
 import com.zxhhyj.example_vap_shared.generated.resources.case_window_expand_title
 import com.zxhhyj.vap.player.VapDemoClip
@@ -38,7 +40,8 @@ enum class DemoCase {
     HannaBall,
     WindowExpand,
     TouchWake,
-    InstanceStress,
+    PresentBenchmark,
+    ConcurrentBenchmark,
 }
 
 internal val DemoCase.titleRes: StringResource
@@ -49,7 +52,8 @@ internal val DemoCase.titleRes: StringResource
         DemoCase.HannaBall -> Res.string.case_hanna_ball_title
         DemoCase.WindowExpand -> Res.string.case_window_expand_title
         DemoCase.TouchWake -> Res.string.case_touch_wake_title
-        DemoCase.InstanceStress -> Res.string.case_instance_stress_title
+        DemoCase.PresentBenchmark -> Res.string.case_present_benchmark_title
+        DemoCase.ConcurrentBenchmark -> Res.string.case_concurrent_benchmark_title
     }
 
 internal val DemoCase.subtitleRes: StringResource
@@ -60,7 +64,8 @@ internal val DemoCase.subtitleRes: StringResource
         DemoCase.HannaBall -> Res.string.case_hanna_ball_subtitle
         DemoCase.WindowExpand -> Res.string.case_window_expand_subtitle
         DemoCase.TouchWake -> Res.string.case_touch_wake_subtitle
-        DemoCase.InstanceStress -> Res.string.case_instance_stress_subtitle
+        DemoCase.PresentBenchmark -> Res.string.case_present_benchmark_subtitle
+        DemoCase.ConcurrentBenchmark -> Res.string.case_concurrent_benchmark_subtitle
     }
 
 @Composable

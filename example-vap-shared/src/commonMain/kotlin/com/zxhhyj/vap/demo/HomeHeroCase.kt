@@ -20,11 +20,28 @@ import com.zxhhyj.example_vap_shared.generated.resources.status_missing_hanna_ho
 import com.zxhhyj.example_vap_shared.generated.resources.status_playing_asset
 import com.zxhhyj.example_vap_shared.generated.resources.status_progress_percent
 import com.zxhhyj.vap.player.VapAnimation
+import com.zxhhyj.vap.player.VapAnimationState
 import com.zxhhyj.vap.player.VapConstants
 import com.zxhhyj.vap.player.VapDemoClip
 import com.zxhhyj.vap.player.animateVapCompositionAsState
 import org.jetbrains.compose.resources.stringResource
 
+/** Reads [VapAnimationState.progress] only in this leaf so siblings can skip. */
+@Composable
+private fun HomeHeroProgressLabel(
+    anim: VapAnimationState,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        text = stringResource(
+            Res.string.status_progress_percent,
+            (anim.progress * 100).toInt(),
+        ),
+        color = MaterialTheme.colors.onSurface.copy(alpha = 0.55f),
+        fontSize = 12.sp,
+        modifier = modifier,
+    )
+}
 
 @Composable
 internal fun HomeHeroCase(
@@ -65,13 +82,8 @@ internal fun HomeHeroCase(
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.size(420.dp),
             )
-            Text(
-                text = stringResource(
-                    Res.string.status_progress_percent,
-                    (anim.progress * 100).toInt(),
-                ),
-                color = MaterialTheme.colors.onSurface.copy(alpha = 0.55f),
-                fontSize = 12.sp,
+            HomeHeroProgressLabel(
+                anim = anim,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(12.dp),

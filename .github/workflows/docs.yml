@@ -21,51 +21,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
-      - name: Generate Dokka HTML documentation
-        run: ./gradlew dokkaGenerate --no-configuration-cache
-      - name: Collect and combine module docs
-        run: |
-          mkdir -p build/dokka/site
-          {
-            cat << 'EOF'
-          <!DOCTYPE html>
-          <meta charset="utf-8">
-          <title>VAP API Docs</title>
-          <h1>VAP API Documentation</h1>
-          <ul>
-          EOF
-            copied=0
-            for module in $(./gradlew -q printPublishableModules --no-configuration-cache); do
-              if [ ! -f "$module/build/dokka/html/index.html" ]; then
-                continue
-              fi
-              mkdir -p "build/dokka/site/$module"
-              cp -r "$module/build/dokka/html/." "build/dokka/site/$module/"
-              copied=$((copied + 1))
-              blurb=$(case "$module" in
-                vap-core) echo "MP4/VAPC container models shared by encode and decode" ;;
-                vap-decode) echo "Frame decoding, platform MP4 parsing, GL pipelines" ;;
-                vap-encode) echo "Alpha-frame packing, MP4 box insertion, vapc JSON" ;;
-                vap-compose) echo "Compose Multiplatform VAP player components" ;;
-              esac)
-              if [ -n "$blurb" ]; then
-                echo "    <li><a href=\"$module/\">$module</a> — $blurb</li>"
-              else
-                echo "    <li><a href=\"$module/\">$module</a></li>"
-              fi
-            done
-            cat << 'EOF'
-          </ul>
-          EOF
-            if [ "$copied" -eq 0 ]; then
-              echo "No Dokka HTML output found for publishable modules." >&2
-              exit 1
-            fi
-          } > build/dokka/site/index.html
+      - name: Generate aggregated Dokka HTML documentation
+        run: ./gradlew dokkaGeneratePublicationHtml --no-configuration-cache
+        env:
+          ORG_GRADLE_PROJECT_version: ${{ github.event.release.tag_name }}
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: build/dokka/site
+          path: build/dokka/html
   deploy:
     needs: build
     runs-on: ubuntu-latest

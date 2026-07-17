@@ -17,6 +17,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -36,19 +37,16 @@ public actual class VapFrameDecoder actual constructor() {
     private var config: VapConfig? = null
     private var tempFile: File? = null
     private var loop: Boolean = false
-    private var outputMode: VapGlOutputMode = VapGlOutputMode.HardwareBuffer
 
     private var extractor: MediaExtractor? = null
     private var codec: MediaCodec? = null
+    private var codecAsync: VapMediaCodecAsync? = null
     private var glPipeline: VapOffscreenGlPipeline? = null
 
-    private var frameChannel =
-        Channel<VapGlFrame>(capacity = VapOffscreenGlPipeline.FRAME_CHANNEL_CAPACITY)
     private var presentedTicks =
         Channel<Unit>(capacity = VapOffscreenGlPipeline.FRAME_CHANNEL_CAPACITY)
     private val inputDone = AtomicBoolean(false)
     private val stopped = AtomicBoolean(false)
-
 
     private val pendingWindowSurface = AtomicReference<PendingWindowSurface?>(null)
     private val pendingSwapEnabled = AtomicReference<Boolean?>(null)
@@ -57,16 +55,10 @@ public actual class VapFrameDecoder actual constructor() {
     private var decodeJob: Job? = null
 
     private var glSlots = Semaphore(permits = 1)
-    private val speedControl = VapSpeedControl()
     private val playbackGate = VapPlaybackGate()
     private var displayW = 0
     private var displayH = 0
     private var targetFrameRate: Int = 0
-
-
-    public fun setOutputMode(mode: VapGlOutputMode) {
-        outputMode = mode
-    }
 
     public fun attachOutputSurface(surface: Surface, width: Int, height: Int) {
         val pending = PendingWindowSurface(
@@ -87,11 +79,17 @@ public actual class VapFrameDecoder actual constructor() {
         glPipeline?.resizeOutput(w, h)
     }
 
-    public fun detachOutputSurface() {
+    /** Coroutine-friendly detach (uses [VapSharedGlRuntime.withGl]). */
+    public suspend fun detachOutputSurface() {
         pendingWindowSurface.store(null)
         glPipeline?.detachOutputSurface()
     }
 
+    /** For synchronous Surface callbacks such as [android.view.Surface] destroy. */
+    public fun detachOutputSurfaceBlocking() {
+        pendingWindowSurface.store(null)
+        glPipeline?.detachOutputSurfaceBlocking()
+    }
 
     public fun setSwapEnabled(enabled: Boolean) {
         setVisible(enabled)
@@ -116,26 +114,14 @@ public actual class VapFrameDecoder actual constructor() {
             config = parsed
             setTargetFrameRate(fpsOverride ?: 0)
             startPipeline(filePath, parsed)
-            applyDisplaySize(parsed, displayW, displayH)
             parsed
         }
 
     public actual suspend fun nextFrame(): VapPlatformFrame? {
-        if (outputMode == VapGlOutputMode.WindowSurface) {
-            error("nextFrame() is not used in WindowSurface mode; call awaitFramePresented()")
-        }
-        if (config == null || stopped.load()) return null
-        playbackGate.awaitActive { stopped.load() }
-        if (config == null || stopped.load()) return null
-        val frame = withTimeoutOrNull(3_000L) { frameChannel.receive() } ?: return null
-        return VapPlatformFrame.fromGlFrame(frame)
+        error("Android VAP uses WindowSurface; call awaitFramePresented()")
     }
 
-
     public suspend fun awaitFramePresented(): Boolean {
-        if (outputMode != VapGlOutputMode.WindowSurface) {
-            error("awaitFramePresented() requires WindowSurface output mode")
-        }
         if (config == null || stopped.load()) return false
         playbackGate.awaitActive { stopped.load() }
         if (config == null || stopped.load()) return false
@@ -145,12 +131,10 @@ public actual class VapFrameDecoder actual constructor() {
         } ?: false
     }
 
-    public actual fun releaseDecodeSession() {
-        runBlocking {
-            stopPipeline()
-            config = null
-            loop = false
-        }
+    public actual suspend fun releaseDecodeSession() {
+        stopPipeline()
+        config = null
+        loop = false
     }
 
     public actual fun close() {
@@ -161,8 +145,6 @@ public actual class VapFrameDecoder actual constructor() {
         if (widthPx == displayW && heightPx == displayH) return
         displayW = widthPx
         displayH = heightPx
-        val cfg = config ?: return
-        applyDisplaySize(cfg, widthPx, heightPx)
     }
 
     public actual fun setPlaying(playing: Boolean) {
@@ -171,7 +153,6 @@ public actual class VapFrameDecoder actual constructor() {
 
     public actual fun setTargetFrameRate(fps: Int) {
         targetFrameRate = fps.coerceAtLeast(0)
-        speedControl.setFixedPlaybackRate(targetFrameRate)
         glPipeline?.setTargetFrameRate(targetFrameRate)
         glPipeline?.resetPresentClock()
     }
@@ -185,23 +166,11 @@ public actual class VapFrameDecoder actual constructor() {
     private fun applyGateChange(resumed: Boolean) {
         if (!playbackGate.isActive()) {
             glPipeline?.discardPendingPresent()
-            drainFrameChannel()
             drainPresentedTicks()
         }
         if (resumed) {
-            speedControl.reset()
             glPipeline?.resetPresentClock()
         }
-    }
-
-    private fun applyDisplaySize(cfg: VapConfig, widthPx: Int, heightPx: Int) {
-        if (widthPx <= 0 || heightPx <= 0) return
-        if (outputMode == VapGlOutputMode.WindowSurface) {
-
-            return
-        }
-        val fitted = VapOutputSize.fit(cfg.width, cfg.height, widthPx, heightPx)
-        glPipeline?.setTargetOutputSize(fitted.width, fitted.height)
     }
 
     private suspend fun startPipeline(filePath: String, cfg: VapConfig) {
@@ -209,18 +178,13 @@ public actual class VapFrameDecoder actual constructor() {
         stopped.store(false)
         inputDone.store(false)
         glSlots = Semaphore(permits = 1)
-        frameChannel = Channel(capacity = VapOffscreenGlPipeline.FRAME_CHANNEL_CAPACITY)
         presentedTicks = Channel(capacity = VapOffscreenGlPipeline.FRAME_CHANNEL_CAPACITY)
-        speedControl.reset()
 
         val pipeline = VapOffscreenGlPipeline(
             config = cfg,
-            outputMode = outputMode,
-            frameChannel = frameChannel.takeIf { outputMode == VapGlOutputMode.HardwareBuffer },
-            presentedTicks = presentedTicks.takeIf { outputMode == VapGlOutputMode.WindowSurface },
+            presentedTicks = presentedTicks,
             stopped = stopped,
             onFrameComposited = { glSlots.release() },
-            maxBufferedFrames = VapOffscreenGlPipeline.FRAME_CHANNEL_CAPACITY,
         )
         check(pipeline.start()) { "Failed to start offscreen GL pipeline" }
         pipeline.setTargetFrameRate(targetFrameRate)
@@ -236,91 +200,58 @@ public actual class VapFrameDecoder actual constructor() {
         val format = ext.getTrackFormat(track)
         val mime = format.getString(MediaFormat.KEY_MIME) ?: error("missing mime")
 
+        val async = VapMediaCodecAsync()
         val decoder = MediaCodec.createDecoderByType(mime)
+        // Async callback must be set before configure.
+        async.attach(decoder)
+        decoder.configure(format, surface, null, 0)
+        async.start(decoder)
+
+        codecAsync = async
         codec = decoder
         extractor = ext
-        decoder.configure(format, surface, null, 0)
-        decoder.start()
 
         decodeJob = scope.launch {
-            pumpCodec(ext, decoder, cfg.totalFrames)
+            pumpCodecAsync(ext, decoder, async, cfg.totalFrames)
         }
     }
 
-    private suspend fun pumpCodec(extractor: MediaExtractor, codec: MediaCodec, totalFrames: Int) {
-        val info = MediaCodec.BufferInfo()
-        val timeoutUs = 10_000L
+    private suspend fun pumpCodecAsync(
+        extractor: MediaExtractor,
+        codec: MediaCodec,
+        async: VapMediaCodecAsync,
+        totalFrames: Int,
+    ) {
         var renderedInLoop = 0
         try {
             while (coroutineContext.isActive && !stopped.load()) {
                 if (!playbackGate.isActive()) {
                     playbackGate.awaitActive { stopped.load() }
                     if (stopped.load() || !coroutineContext.isActive) break
-                    speedControl.reset()
                     glPipeline?.resetPresentClock()
                     continue
                 }
 
-                if (!inputDone.load()) {
-                    val inIndex = codec.dequeueInputBuffer(timeoutUs)
-                    if (inIndex >= 0) {
-                        val buffer = codec.getInputBuffer(inIndex) ?: continue
-                        val sample = extractor.readSampleData(buffer, 0)
-                        if (sample < 0) {
-                            codec.queueInputBuffer(
-                                inIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM,
-                            )
-                            inputDone.store(true)
-                        } else {
-                            codec.queueInputBuffer(inIndex, 0, sample, extractor.sampleTime, 0)
-                            extractor.advance()
+                val endLoop = select {
+                    if (!inputDone.load()) {
+                        async.onInputBuffer { index ->
+                            feedInputBuffer(extractor, codec, index)
+                            false
                         }
+                    }
+                    async.onOutputBuffer { packet ->
+                        val result = handleOutputBuffer(codec, packet, renderedInLoop, totalFrames)
+                        renderedInLoop = result.renderedInLoop
+                        result.endLoop
                     }
                 }
-
-                val outIndex = codec.dequeueOutputBuffer(info, timeoutUs)
-                if (outIndex >= 0) {
-                    val eos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
-                    val render = info.size > 0 && !eos
-                    if (render) {
-                        if (!playbackGate.isActive()) {
-                            codec.releaseOutputBuffer(outIndex, false)
-                            continue
-                        }
-                        var submittedToGl = false
-                        glSlots.acquire()
-                        try {
-                            if (stopped.load() || !coroutineContext.isActive) {
-                                codec.releaseOutputBuffer(outIndex, false)
-                                break
-                            }
-                            if (!playbackGate.isActive()) {
-                                codec.releaseOutputBuffer(outIndex, false)
-                                continue
-                            }
-                            // WindowSurface: vsync + PTS gate paces present (no sleep).
-                            // HardwareBuffer: keep sleep-based realtime control.
-                            if (outputMode != VapGlOutputMode.WindowSurface) {
-                                speedControl.preRender(info.presentationTimeUs)
-                            }
-                            codec.releaseOutputBuffer(outIndex, true)
-                            submittedToGl = true
-                            renderedInLoop++
-                        } finally {
-                            if (!submittedToGl) glSlots.release()
-                        }
-                    } else {
-                        codec.releaseOutputBuffer(outIndex, false)
+                if (endLoop) {
+                    if (loop && !stopped.load() && coroutineContext.isActive) {
+                        softRewind(extractor, codec, async)
+                        renderedInLoop = 0
+                        continue
                     }
-
-                    if (eos || renderedInLoop >= totalFrames) {
-                        if (loop && !stopped.load() && coroutineContext.isActive) {
-                            softRewind(extractor, codec)
-                            renderedInLoop = 0
-                            continue
-                        }
-                        break
-                    }
+                    break
                 }
             }
         } catch (e: CancellationException) {
@@ -330,27 +261,86 @@ public actual class VapFrameDecoder actual constructor() {
         }
     }
 
-    private fun softRewind(extractor: MediaExtractor, codec: MediaCodec) {
-        extractor.seekTo(0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-        codec.flush()
-        inputDone.store(false)
-        speedControl.reset()
-        glPipeline?.discardPendingPresent()
-        glPipeline?.resetPresentClock()
-        drainFrameChannel()
-        drainPresentedTicks()
+    private fun feedInputBuffer(extractor: MediaExtractor, codec: MediaCodec, index: Int) {
+        val buffer = codec.getInputBuffer(index) ?: run {
+            codec.queueInputBuffer(index, 0, 0, 0L, 0)
+            return
+        }
+        val sample = extractor.readSampleData(buffer, 0)
+        if (sample < 0) {
+            codec.queueInputBuffer(
+                index, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM,
+            )
+            inputDone.store(true)
+        } else {
+            codec.queueInputBuffer(index, 0, sample, extractor.sampleTime, 0)
+            extractor.advance()
+        }
     }
 
-    private fun drainFrameChannel() {
-        while (true) {
-            val frame = frameChannel.tryReceive().getOrNull() ?: break
-            frame.release()
+    private data class OutputHandleResult(
+        val renderedInLoop: Int,
+        val endLoop: Boolean,
+    )
+
+    private suspend fun handleOutputBuffer(
+        codec: MediaCodec,
+        packet: VapMediaCodecAsync.OutputBuffer,
+        renderedInLoop: Int,
+        totalFrames: Int,
+    ): OutputHandleResult {
+        val eos = packet.isEos
+        val render = packet.size > 0 && !eos
+        var rendered = renderedInLoop
+        if (render) {
+            if (!playbackGate.isActive()) {
+                codec.releaseOutputBuffer(packet.index, false)
+                return OutputHandleResult(rendered, endLoop = false)
+            }
+            var submittedToGl = false
+            glSlots.acquire()
+            try {
+                if (stopped.load() || !coroutineContext.isActive) {
+                    codec.releaseOutputBuffer(packet.index, false)
+                    return OutputHandleResult(rendered, endLoop = true)
+                }
+                if (!playbackGate.isActive()) {
+                    codec.releaseOutputBuffer(packet.index, false)
+                    return OutputHandleResult(rendered, endLoop = false)
+                }
+                // Vsync + PTS / target FPS gate paces present (no sleep).
+                codec.releaseOutputBuffer(packet.index, true)
+                submittedToGl = true
+                rendered++
+            } finally {
+                if (!submittedToGl) glSlots.release()
+            }
+        } else {
+            codec.releaseOutputBuffer(packet.index, false)
         }
+
+        return OutputHandleResult(rendered, endLoop = eos || rendered >= totalFrames)
+    }
+
+    private fun softRewind(
+        extractor: MediaExtractor,
+        codec: MediaCodec,
+        async: VapMediaCodecAsync,
+    ) {
+        extractor.seekTo(0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+        // Async mode: flush invalidates outstanding buffer indices; must start() again.
+        async.clearPending()
+        codec.flush()
+        async.clearPending()
+        async.start(codec)
+        inputDone.store(false)
+        glPipeline?.discardPendingPresent()
+        glPipeline?.resetPresentClock()
+        drainPresentedTicks()
     }
 
     private fun drainPresentedTicks() {
         while (presentedTicks.tryReceive().isSuccess) {
-
         }
     }
 
@@ -358,6 +348,8 @@ public actual class VapFrameDecoder actual constructor() {
         stopped.store(true)
         decodeJob?.cancelAndJoin()
         decodeJob = null
+        codecAsync?.close()
+        codecAsync = null
         try {
             codec?.stop()
             codec?.release()
@@ -367,9 +359,6 @@ public actual class VapFrameDecoder actual constructor() {
         extractor?.release()
         extractor = null
 
-        drainFrameChannel()
-        frameChannel.close()
-        drainFrameChannel()
         drainPresentedTicks()
         presentedTicks.close()
         drainPresentedTicks()
@@ -380,7 +369,6 @@ public actual class VapFrameDecoder actual constructor() {
     }
 
     private fun applyPendingWindowOutput(pipeline: VapOffscreenGlPipeline) {
-        if (outputMode != VapGlOutputMode.WindowSurface) return
         pendingSwapEnabled.load()?.let(pipeline::setSwapEnabled)
         pendingWindowSurface.load()?.let { pending ->
             pipeline.attachOutputSurface(pending.surface, pending.width, pending.height)

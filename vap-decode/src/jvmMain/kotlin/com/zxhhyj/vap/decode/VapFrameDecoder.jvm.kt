@@ -157,12 +157,14 @@ public actual class VapFrameDecoder actual constructor() {
         }
     }
 
-    public actual fun releaseDecodeSession() {
+    public actual suspend fun releaseDecodeSession() {
         releaseDecodeSessionInternal()
     }
 
     public actual fun close() {
-        closeInternal()
+        runBlocking { releaseDecodeSessionInternal() }
+        tempFile?.delete()
+        tempFile = null
     }
 
     private fun openFfmpeg(path: String) {
@@ -362,12 +364,10 @@ public actual class VapFrameDecoder actual constructor() {
         return VapPlatformFrame(image)
     }
 
-    private fun releaseDecodeSessionInternal() {
+    private suspend fun releaseDecodeSessionInternal() {
         stopped.store(true)
-        runBlocking {
-            decodeJob?.cancelAndJoin()
-            decodeJob = null
-        }
+        decodeJob?.cancelAndJoin()
+        decodeJob = null
         frameChannel.close()
         while (true) {
             frameChannel.tryReceive().getOrNull()?.release() ?: break
@@ -392,7 +392,7 @@ public actual class VapFrameDecoder actual constructor() {
         loop = false
     }
 
-    private fun closeInternal() {
+    private suspend fun closeInternal() {
         releaseDecodeSessionInternal()
         tempFile?.delete()
         tempFile = null

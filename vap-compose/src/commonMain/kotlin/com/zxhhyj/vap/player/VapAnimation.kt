@@ -20,18 +20,11 @@ public fun VapAnimation(
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Fit,
 ) {
-    if (animationState.usesSurfaceHost) {
-        VapSurfaceRenderHost(
-            animationState = animationState,
-            modifier = modifier,
-        )
-    } else {
-        VapCanvasAnimation(
-            animationState = animationState,
-            modifier = modifier,
-            contentScale = contentScale,
-        )
-    }
+    VapPlatformRenderHost(
+        animationState = animationState,
+        modifier = modifier,
+        contentScale = contentScale,
+    )
 }
 
 @Composable

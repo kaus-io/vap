@@ -26,10 +26,24 @@ jobs:
           ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_KEY_ID }}
           ORG_GRADLE_PROJECT_version: ${{ github.event.release.tag_name }}
       - name: Collect artifacts
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
         run: |
           mkdir -p artifacts
           for module in $(./gradlew -q printPublishableModules --no-configuration-cache); do
-            find "$module" -name '*.jar' -not -path '*/tmp/*' -exec cp {} artifacts/ \;
+            if [ -d "$module/build/libs" ]; then
+              find "$module/build/libs" -type f \( \
+                  -name "*-${VERSION}.jar" -o \
+                  -name "*-${VERSION}.aar" \
+                \) \
+                -not -name "*-metadata-${VERSION}.jar" \
+                -exec cp {} artifacts/ \;
+            fi
+            if [ -d "$module/build/outputs/aar" ]; then
+              find "$module/build/outputs/aar" -type f \
+                -name "*-${VERSION}*.aar" \
+                -exec cp {} artifacts/ \;
+            fi
           done
       - uses: softprops/action-gh-release@v2
         with:

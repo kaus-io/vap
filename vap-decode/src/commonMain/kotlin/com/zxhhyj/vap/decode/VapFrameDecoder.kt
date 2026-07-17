@@ -8,8 +8,8 @@ public expect class VapFrameDecoder() {
         source: VapSource,
         loop: Boolean = false,
         /**
-         * Target present frame rate. `null` / `<= 0` follows media PTS (or container fps pacing).
-         * On Android WindowSurface this caps/paces vsync presents; elsewhere drives [VapSpeedControl].
+         * Target present FPS. `null` / `<= 0` follows media PTS.
+         * Android: PAG-style wall-clock frame grid when `> 0`; JVM: [VapSpeedControl] pacing.
          */
         fpsOverride: Int? = null
     ): VapConfig
@@ -19,8 +19,8 @@ public expect class VapFrameDecoder() {
     public fun setPlaying(playing: Boolean)
 
     /**
-     * Target present FPS. `0` disables the override (follow media timestamps).
-     * Can be changed while a session is open.
+     * Target present FPS. `0` = follow media PTS.
+     * Android `> 0`: PAG-style wall-clock grid (`floor(t * fps)`); can change while open.
      */
     public fun setTargetFrameRate(fps: Int)
 
@@ -33,8 +33,12 @@ public expect class VapFrameDecoder() {
     /**
      * Tear down MediaCodec / GL (or FFmpeg) session while keeping this instance reusable.
      * Call [open] again to resume. Does not delete temp files from [VapSource.Bytes].
+     *
+     * Prefer calling from a coroutine (e.g. Compose [LaunchedEffect]); use [close] from
+     * non-coroutine dispose paths.
      */
-    public fun releaseDecodeSession()
+    public suspend fun releaseDecodeSession()
 
+    /** Blocking teardown for non-coroutine dispose (e.g. Compose [DisposableEffect]). */
     public fun close()
 }

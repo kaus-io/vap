@@ -28,7 +28,7 @@ internal actual fun VapSurfaceRenderHost(
                 }
             }
             surface.onDestroyed {
-                decoder.detachOutputSurface()
+                decoder.detachOutputSurfaceBlocking()
             }
             try {
                 awaitCancellation()

@@ -20,11 +20,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zxhhyj.vap.demo.DemoNavHost
 import com.zxhhyj.vap.demo.DemoTheme
+import com.zxhhyj.vap.demo.PresentBenchLaunch
 import com.zxhhyj.vap.player.rememberDemoVapSources
 
 @Composable
 @Preview
-fun App() {
+fun App(
+    benchLaunch: PresentBenchLaunch? = null,
+    onBenchFinished: (() -> Unit)? = null,
+) {
     DemoTheme {
         var error by remember { mutableStateOf<String?>(null) }
         val clips = rememberDemoVapSources()
@@ -55,6 +59,8 @@ fun App() {
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
+                benchLaunch = benchLaunch,
+                onBenchFinished = onBenchFinished,
             )
         }
     }

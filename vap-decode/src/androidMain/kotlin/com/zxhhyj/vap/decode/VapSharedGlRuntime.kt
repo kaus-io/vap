@@ -15,7 +15,6 @@ import android.view.Surface
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.android.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -30,6 +29,10 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 /**
  * Shared EGL + single-thread coroutine dispatcher.
  * HandlerThread/Handler stay private (SurfaceTexture listener + dispatcher backing only).
+ *
+ * [makeCurrent] is idempotent: skips [EGL14.eglMakeCurrent] when [surface] is already
+ * current. [launchGl] / [withGl] only ensure *some* surface is bound (prefer keep the
+ * last window) instead of forcing the 1x1 pbuffer every time.
  */
 internal object VapSharedGlRuntime {
     private data class Session(
@@ -52,6 +55,9 @@ internal object VapSharedGlRuntime {
     private val session = AtomicReference<Session?>(null)
     private val egl = AtomicReference<Egl?>(null)
 
+    /** Last successful draw/read surface for [egl.context]; GL-thread only. */
+    private var currentDrawSurface: EGLSurface = EGL14.EGL_NO_SURFACE
+
     suspend fun acquire() {
         mutex.withLock {
             if (refCount.fetchAndAdd(1) == 0) {
@@ -69,11 +75,11 @@ internal object VapSharedGlRuntime {
         }
     }
 
-    /** Fire-and-forget work on the GL dispatcher (makes pbuffer current first). */
+    /** Fire-and-forget work on the GL dispatcher (ensures EGL context is current). */
     fun launchGl(block: suspend CoroutineScope.() -> Unit): Job? {
         val s = session.load() ?: return null
         return s.scope.launch(s.dispatcher) {
-            if (!makeCurrentPbuffer()) return@launch
+            if (!ensureContextCurrent()) return@launch
             block()
         }
     }
@@ -82,7 +88,7 @@ internal object VapSharedGlRuntime {
     suspend fun withGl(block: suspend CoroutineScope.() -> Unit): Boolean {
         val s = session.load() ?: return false
         return withContext(s.dispatcher) {
-            if (!makeCurrentPbuffer()) return@withContext false
+            if (!ensureContextCurrent()) return@withContext false
             block()
             true
         }
@@ -97,11 +103,11 @@ internal object VapSharedGlRuntime {
         // Avoid deadlock if already on the GL thread.
         return if (Looper.myLooper() == s.thread.looper) {
             runBlocking {
-                if (!makeCurrentPbuffer()) null else block()
+                if (!ensureContextCurrent()) null else block()
             }
         } else {
             runBlocking(s.dispatcher) {
-                if (!makeCurrentPbuffer()) null else block()
+                if (!ensureContextCurrent()) null else block()
             }
         }
     }
@@ -118,15 +124,38 @@ internal object VapSharedGlRuntime {
         }
     }
 
+    /**
+     * Make [surface] current, or no-op if it already is.
+     * Safe to call only on the GL thread.
+     *
+     * Trusts [currentDrawSurface] bookkeeping (this runtime owns the GL thread) and
+     * skips per-call EGL query when the cached surface already matches.
+     */
     fun makeCurrent(surface: EGLSurface): Boolean {
         val state = egl.load() ?: return false
         if (surface == EGL14.EGL_NO_SURFACE) return false
-        return EGL14.eglMakeCurrent(state.display, surface, surface, state.context)
+        if (currentDrawSurface == surface) return true
+        val ok = EGL14.eglMakeCurrent(state.display, surface, surface, state.context)
+        if (ok) {
+            currentDrawSurface = surface
+        }
+        return ok
     }
 
     fun makeCurrentPbuffer(): Boolean {
         val state = egl.load() ?: return false
         return makeCurrent(state.pbuffer)
+    }
+
+    /**
+     * Ensure our EGL context has *some* draw surface bound.
+     * Keeps the last window surface when possible (avoids pbuffer bounce every [launchGl]).
+     */
+    fun ensureContextCurrent(): Boolean {
+        egl.load() ?: return false
+        if (currentDrawSurface != EGL14.EGL_NO_SURFACE) return true
+        // Fallback: bind pbuffer (also recovers after destroy of the previous surface).
+        return makeCurrentPbuffer()
     }
 
     fun createWindowSurface(surface: Surface): EGLSurface {
@@ -138,9 +167,12 @@ internal object VapSharedGlRuntime {
 
     fun destroySurface(surface: EGLSurface) {
         val display = egl.load()?.display ?: return
-        if (surface != EGL14.EGL_NO_SURFACE && display != EGL14.EGL_NO_DISPLAY) {
-            EGL14.eglDestroySurface(display, surface)
+        if (surface == EGL14.EGL_NO_SURFACE || display == EGL14.EGL_NO_DISPLAY) return
+        // Cannot destroy a surface that is current.
+        if (currentDrawSurface == surface) {
+            makeCurrentPbuffer()
         }
+        EGL14.eglDestroySurface(display, surface)
     }
 
     fun swapBuffers(surface: EGLSurface): Boolean {
@@ -153,7 +185,7 @@ internal object VapSharedGlRuntime {
         val thread = HandlerThread("vap-gl-shared").also { it.start() }
         val frameCallbackHandler = Handler(thread.looper)
         val dispatcher = frameCallbackHandler.asCoroutineDispatcher("vap-gl-shared")
-        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        val scope = CoroutineScope(dispatcher)
         session.store(Session(thread, frameCallbackHandler, dispatcher, scope))
         val ready = withContext(dispatcher) { initEgl() }
         if (!ready) {
@@ -193,12 +225,14 @@ internal object VapSharedGlRuntime {
         val pbuffer = EGL14.eglCreatePbufferSurface(display, config, pbAttrib, 0)
         if (pbuffer == EGL14.EGL_NO_SURFACE) return false
         if (!EGL14.eglMakeCurrent(display, pbuffer, pbuffer, context)) return false
+        currentDrawSurface = pbuffer
         egl.store(Egl(display, context, pbuffer, config))
         return true
     }
 
     private fun releaseEgl() {
         val state = egl.exchange(null) ?: return
+        currentDrawSurface = EGL14.EGL_NO_SURFACE
         if (state.display != EGL14.EGL_NO_DISPLAY) {
             EGL14.eglMakeCurrent(
                 state.display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT,

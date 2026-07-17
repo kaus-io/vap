@@ -4,60 +4,113 @@ import android.view.Choreographer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 
 /**
  * Process-wide vsync ticker (PAG AnimationTicker analogue).
  *
- * Choreographer is reached only through a Main coroutine; consumers collect [ticks]
- * on their own dispatcher (typically the shared GL scope).
+ * One Choreographer pump on Main + **one** SharedFlow collector on the shared GL
+ * thread that fans out to every registered [VapOffscreenGlPipeline]. Pipelines no
+ * longer each `collect` (avoids N×vsync wakeups on the GL dispatcher).
  */
 internal object VapVsyncClock {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val subscribers = AtomicInteger(0)
-    private var pumpJob: Job? = null
+    private val scope = CoroutineScope(Dispatchers.Main.immediate)
+    private val pipelinesLock = Any()
+    private val pipelines = ArrayList<VapOffscreenGlPipeline>()
+    private val pumpJob = AtomicReference<Job?>(null)
+    private val dispatchJob = AtomicReference<Job?>(null)
 
-    private val _ticks = MutableSharedFlow<Long>(
+    private val ticks = MutableSharedFlow<Long>(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
-    val ticks: SharedFlow<Long> = _ticks.asSharedFlow()
 
-    fun addSubscriber() {
-        if (subscribers.getAndIncrement() == 0) {
-            startPump()
-        }
-    }
-
-    fun removeSubscriber() {
-        if (subscribers.decrementAndGet() <= 0) {
-            subscribers.set(0)
-            stopPump()
-        }
-    }
-
-    private fun startPump() {
-        if (pumpJob?.isActive == true) return
-        pumpJob = scope.launch {
-            while (subscribers.get() > 0) {
-                val frameTimeNanos = awaitFrameNanos()
-                _ticks.emit(frameTimeNanos)
+    /** @return false if the shared GL session is not ready (caller should retry). */
+    fun register(pipeline: VapOffscreenGlPipeline): Boolean {
+        synchronized(pipelinesLock) {
+            if (!pipelines.contains(pipeline)) {
+                pipelines.add(pipeline)
             }
         }
+        ensurePump()
+        if (!ensureDispatch()) {
+            synchronized(pipelinesLock) {
+                pipelines.remove(pipeline)
+                if (pipelines.isEmpty()) stopAll()
+            }
+            return false
+        }
+        return true
     }
 
-    private fun stopPump() {
-        pumpJob?.cancel()
-        pumpJob = null
+    fun unregister(pipeline: VapOffscreenGlPipeline) {
+        val empty = synchronized(pipelinesLock) {
+            pipelines.remove(pipeline)
+            pipelines.isEmpty()
+        }
+        if (empty) stopAll()
+    }
+
+    private fun hasPipelines(): Boolean =
+        synchronized(pipelinesLock) { pipelines.isNotEmpty() }
+
+    private fun snapshotPipelines(): Array<VapOffscreenGlPipeline> =
+        synchronized(pipelinesLock) { pipelines.toTypedArray() }
+
+    private fun ensurePump() {
+        while (true) {
+            val current = pumpJob.get()
+            if (current?.isActive == true) return
+            if (!hasPipelines()) return
+            val job = scope.launch {
+                while (hasPipelines()) {
+                    val frameTimeNanos = awaitFrameNanos()
+                    ticks.emit(frameTimeNanos)
+                }
+            }
+            if (pumpJob.compareAndSet(current, job)) {
+                current?.cancel()
+                return
+            }
+            job.cancel()
+        }
+    }
+
+    /** @return false when GL runtime cannot start a dispatch job. */
+    private fun ensureDispatch(): Boolean {
+        while (true) {
+            val current = dispatchJob.get()
+            if (current?.isActive == true) return true
+            if (!hasPipelines()) return false
+            val job = VapSharedGlRuntime.launchGl {
+                ticks.collect { frameTimeNanos ->
+                    // Snapshot under lock; most pipelines early-out when !pendingPresent.
+                    val snap = snapshotPipelines()
+                    for (p in snap) {
+                        p.onVsyncTick(frameTimeNanos)
+                    }
+                }
+            }
+            if (job == null) {
+                return false
+            }
+            if (dispatchJob.compareAndSet(current, job)) {
+                current?.cancel()
+                return true
+            }
+            job.cancel()
+        }
+    }
+
+    private fun stopAll() {
+        dispatchJob.getAndSet(null)?.cancel()
+        pumpJob.getAndSet(null)?.cancel()
     }
 
     private suspend fun awaitFrameNanos(): Long =
