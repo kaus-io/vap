@@ -12,6 +12,9 @@
     <string name="quality_bitrate">bitrate</string>
     <string name="quality_vbr">vbr</string>
     <string name="quality_crf">crf</string>
+    <string name="alpha">Alpha</string>
+    <string name="alpha_on">on</string>
+    <string name="alpha_off">off</string>
     <string name="crf_value">CRF (0–51)</string>
     <string name="bitrate_kbps">Bitrate kbps</string>
     <string name="vbr_target_kbps">VBR target kbps</string>

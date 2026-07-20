@@ -28,9 +28,13 @@ import androidx.compose.ui.unit.dp
 import com.zxhhyj.vap.encode.DefaultVapEncoder
 import com.zxhhyj.vap.encode.EncodeProgress
 import com.zxhhyj.vap.encode.EncodeRequest
+import com.zxhhyj.vap.encode.HasAlpha
 import com.zxhhyj.vap.encode.Quality
 import com.zxhhyj.vap.encode.VideoCodec
 import com.zxhhyj.vap.tool.generated.resources.Res
+import com.zxhhyj.vap.tool.generated.resources.alpha
+import com.zxhhyj.vap.tool.generated.resources.alpha_off
+import com.zxhhyj.vap.tool.generated.resources.alpha_on
 import com.zxhhyj.vap.tool.generated.resources.app_subtitle
 import com.zxhhyj.vap.tool.generated.resources.app_title
 import com.zxhhyj.vap.tool.generated.resources.bitrate_kbps
@@ -64,13 +68,21 @@ import org.jetbrains.compose.resources.stringResource
 import java.awt.Desktop
 import java.io.File
 
+/**
+ * Compose UI for `app-vap-tool`. Holds the form state, drives [DefaultVapEncoder]
+ * via a coroutine job, and reports progress / status / cancellation through the
+ * [EncodeProgress] flow collected in [job].
+ *
+ * `app-vap-tool` 的 Compose UI。持有表单状态,通过协程 job 驱动 [DefaultVapEncoder],
+ * 借助 [EncodeProgress] 流程上报进度、状态与取消事件。
+ */
 @Composable
 fun ToolApp(
     onEncodeSuccess: (videoPath: String) -> Unit = {},
 ) {
     MaterialTheme {
         var inputDir by remember { mutableStateOf("") }
-        var fps by remember { mutableStateOf("24") }
+        var fps by remember { mutableStateOf("60") }
         var scale by remember { mutableStateOf("0.5") }
         var codecH265 by remember { mutableStateOf(false) }
         var qualityMode by remember { mutableStateOf(QualityUiMode.Bitrate) }
@@ -79,6 +91,7 @@ fun ToolApp(
         var vbrMax by remember { mutableStateOf("4500") }
         var crf by remember { mutableStateOf("29") }
         var ffmpegPath by remember { mutableStateOf("ffmpeg") }
+        var hasAlphaChoice by remember { mutableStateOf<Boolean?>(null) }
         var status by remember { mutableStateOf<String?>(null) }
         var progress by remember { mutableFloatStateOf(0f) }
         var running by remember { mutableStateOf(false) }
@@ -139,6 +152,20 @@ fun ToolApp(
                 Text(stringResource(Res.string.codec_h264))
                 RadioButton(selected = codecH265, onClick = { codecH265 = true })
                 Text(stringResource(Res.string.codec_h265))
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(Res.string.alpha))
+                RadioButton(
+                    selected = hasAlphaChoice == true,
+                    onClick = { hasAlphaChoice = true },
+                )
+                Text(stringResource(Res.string.alpha_on))
+                RadioButton(
+                    selected = hasAlphaChoice == false,
+                    onClick = { hasAlphaChoice = false },
+                )
+                Text(stringResource(Res.string.alpha_off))
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -212,7 +239,7 @@ fun ToolApp(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
-                    enabled = !running && inputDir.isNotBlank(),
+                    enabled = !running && inputDir.isNotBlank() && hasAlphaChoice != null,
                     onClick = {
                         status = null
                         progress = 0f
@@ -220,7 +247,7 @@ fun ToolApp(
                         running = true
                         val request = EncodeRequest(
                             inputDir = inputDir,
-                            fps = fps.toIntOrNull() ?: 24,
+                            fps = fps.toIntOrNull() ?: 60,
                             scale = scale.toFloatOrNull() ?: 0.5f,
                             codec = if (codecH265) VideoCodec.H265 else VideoCodec.H264,
                             quality = when (qualityMode) {
@@ -239,7 +266,13 @@ fun ToolApp(
                                 }
                             },
                             ffmpegPath = ffmpegPath,
+                            hasAlpha = if (hasAlphaChoice == true) HasAlpha.On else HasAlpha.Off,
                         )
+                        // Build the request from the current form snapshot, then launch
+                        // a single encode coroutine. `job` is tracked so the Cancel
+                        // button can interrupt the flow mid-encode.
+                        // 按当前表单快照构造 request,启动单条 encode 协程;
+                        // 持有 `job` 以便 Cancel 按钮在编码中途取消。
                         job = scope.launch {
                             encoder.encode(request).collect { event ->
                                 when (event) {
@@ -293,6 +326,10 @@ fun ToolApp(
     }
 }
 
+// UI-only enum that mirrors the CLI's `--quality` choices. Kept private to ToolApp
+// because the actual encoder speaks in [Quality] sealed classes.
+// UI 专用枚举,与 CLI 的 `--quality` 选项一一对应。仅在 ToolApp 内使用,
+// 真正传给编码器的是 [Quality] 密封类。
 private enum class QualityUiMode {
     Bitrate,
     Vbr,

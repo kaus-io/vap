@@ -20,6 +20,11 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.polymorphic
 
+/**
+ * Serializable navigation-key hierarchy persisted by Navigation 3 saved state.
+ *
+ * 由 Navigation 3 保存状态持久化的可序列化导航键层级。
+ */
 @Serializable
 sealed interface DemoRoute : NavKey
 
@@ -39,6 +44,11 @@ private val demoNavConfig = SavedStateConfiguration {
     }
 }
 
+/**
+ * Owns the shared back stack and maps optional external benchmark launches to one destination.
+ *
+ * 管理共享返回栈，并将可选的外部基准启动参数映射到单一目标页。
+ */
 @Composable
 internal fun DemoNavHost(
     clips: List<VapDemoClip>,
@@ -54,12 +64,22 @@ internal fun DemoNavHost(
         }
     }
 
+    // Resolve an external launch in an effect so route mutation stays outside composition.
+    // 在副作用中解析外部启动参数，使路由变更发生在组合阶段之外。
     LaunchedEffect(benchLaunch) {
         if (benchLaunch == null) return@LaunchedEffect
-        val target = if (benchLaunch.isMulti) {
-            DemoCase.ConcurrentBenchmark
-        } else {
-            DemoCase.PresentBenchmark
+        val target = when {
+            benchLaunch.stateSwapSeq.isNotEmpty() -> DemoCase.StateSwapBenchmark
+            benchLaunch.isPagImageView && benchLaunch.isMulti -> DemoCase.PagImageViewConcurrentBenchmark
+            benchLaunch.isPagImageView -> DemoCase.PagImageViewPresentBenchmark
+            benchLaunch.isPagView && benchLaunch.isMulti -> DemoCase.PagConcurrentBenchmark
+            benchLaunch.isPagView -> DemoCase.PagPresentBenchmark
+            benchLaunch.isMulti -> DemoCase.ConcurrentBenchmark
+            else -> DemoCase.PresentBenchmark
+        }
+        if (!target.isAvailableOnPlatform) {
+            onError("engine=pag* is Android-only (no official desktop libpag)")
+            return@LaunchedEffect
         }
         val alreadyOpen = backStack.any { it is DemoCaseRoute && it.case == target }
         if (!alreadyOpen) {
@@ -106,7 +126,12 @@ internal fun DemoNavHost(
                     modifier = Modifier.fillMaxSize(),
                     benchLaunch = benchLaunch.takeIf {
                         route.case == DemoCase.PresentBenchmark ||
-                            route.case == DemoCase.ConcurrentBenchmark
+                            route.case == DemoCase.ConcurrentBenchmark ||
+                            route.case == DemoCase.PagPresentBenchmark ||
+                            route.case == DemoCase.PagConcurrentBenchmark ||
+                            route.case == DemoCase.PagImageViewPresentBenchmark ||
+                            route.case == DemoCase.PagImageViewConcurrentBenchmark ||
+                            route.case == DemoCase.StateSwapBenchmark
                     },
                     onBenchFinished = onBenchFinished,
                 )
@@ -168,7 +193,21 @@ private fun DemoCaseContent(
             modifier = modifier,
         )
 
+        DemoCase.WindowColdShow -> WindowColdShowCase(
+            clips = clips,
+            onBack = onBack,
+            onError = onError,
+            modifier = modifier,
+        )
+
         DemoCase.TouchWake -> TouchWakeCase(
+            clips = clips,
+            onBack = onBack,
+            onError = onError,
+            modifier = modifier,
+        )
+
+        DemoCase.GpuBackend -> GpuBackendCase(
             clips = clips,
             onBack = onBack,
             onError = onError,
@@ -185,6 +224,47 @@ private fun DemoCaseContent(
         )
 
         DemoCase.ConcurrentBenchmark -> ConcurrentBenchmarkCase(
+            clips = clips,
+            onBack = onBack,
+            onError = onError,
+            modifier = modifier,
+            launch = benchLaunch,
+            onAutoFinished = onBenchFinished,
+        )
+
+        DemoCase.PagPresentBenchmark -> PagPresentBenchmarkCase(
+            onBack = onBack,
+            onError = onError,
+            modifier = modifier,
+            launch = benchLaunch,
+            onAutoFinished = onBenchFinished,
+        )
+
+        DemoCase.PagConcurrentBenchmark -> PagConcurrentBenchmarkCase(
+            onBack = onBack,
+            onError = onError,
+            modifier = modifier,
+            launch = benchLaunch,
+            onAutoFinished = onBenchFinished,
+        )
+
+        DemoCase.PagImageViewPresentBenchmark -> PagImageViewPresentBenchmarkCase(
+            onBack = onBack,
+            onError = onError,
+            modifier = modifier,
+            launch = benchLaunch,
+            onAutoFinished = onBenchFinished,
+        )
+
+        DemoCase.PagImageViewConcurrentBenchmark -> PagImageViewConcurrentBenchmarkCase(
+            onBack = onBack,
+            onError = onError,
+            modifier = modifier,
+            launch = benchLaunch,
+            onAutoFinished = onBenchFinished,
+        )
+
+        DemoCase.StateSwapBenchmark -> StateSwapBenchmarkCase(
             clips = clips,
             onBack = onBack,
             onError = onError,

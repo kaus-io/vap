@@ -21,6 +21,10 @@
                 <action android:name="com.zxhhyj.vap.action.PRESENT_BENCHMARK" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="com.zxhhyj.vap.action.AHB_PROBE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
     </application>
 

@@ -1,15 +1,13 @@
 package com.zxhhyj.vap.demo
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.MaterialTheme
+import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.unit.dp
 import com.zxhhyj.example_vap_shared.generated.resources.Res
 import com.zxhhyj.example_vap_shared.generated.resources.demo_empty_assets
 import com.zxhhyj.example_vap_shared.generated.resources.demo_platform_unavailable
@@ -33,15 +31,16 @@ internal fun DemoPlatformUnavailableState(modifier: Modifier = Modifier) {
 
 @Composable
 private fun DemoMessageState(text: String, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colors.surface),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            color = MaterialTheme.colors.onSurface.copy(alpha = 0.5f),
-        )
+    Surface(modifier = modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.body1,
+                color = MaterialTheme.colors.onSurface.copy(alpha = 0.5f),
+            )
+        }
     }
 }

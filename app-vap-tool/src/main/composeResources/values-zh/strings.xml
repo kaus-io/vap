@@ -12,6 +12,9 @@
     <string name="quality_bitrate">码率</string>
     <string name="quality_vbr">VBR</string>
     <string name="quality_crf">crf</string>
+    <string name="alpha">透明通道</string>
+    <string name="alpha_on">开</string>
+    <string name="alpha_off">关</string>
     <string name="crf_value">CRF（0–51）</string>
     <string name="bitrate_kbps">码率 kbps</string>
     <string name="vbr_target_kbps">VBR 目标 kbps</string>

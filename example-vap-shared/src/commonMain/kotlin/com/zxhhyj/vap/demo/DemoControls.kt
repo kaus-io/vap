@@ -5,18 +5,18 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.Button
 import androidx.compose.material.ButtonDefaults
+import androidx.compose.material.MaterialTheme
 import androidx.compose.material.OutlinedButton
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.zxhhyj.example_vap_shared.generated.resources.Res
 import com.zxhhyj.example_vap_shared.generated.resources.demo_back
 import org.jetbrains.compose.resources.stringResource
 
 private val ControlMinHeight = 48.dp
-private val ControlPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
+private val ControlPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
 
 @Composable
 internal fun DemoBackButton(
@@ -30,11 +30,19 @@ internal fun DemoBackButton(
             .defaultMinSize(minHeight = ControlMinHeight),
         contentPadding = ControlPadding,
     ) {
-        Text(text = stringResource(Res.string.demo_back), fontSize = 15.sp)
+        Text(
+            text = stringResource(Res.string.demo_back),
+            style = MaterialTheme.typography.button,
+        )
     }
 }
 
 
+/**
+ * Represents mutually exclusive selection with filled and outlined button states.
+ *
+ * 通过实心与描边按钮状态表示互斥选择。
+ */
 @Composable
 internal fun DemoChoiceChip(
     label: String,
@@ -54,7 +62,11 @@ internal fun DemoChoiceChip(
             contentPadding = ControlPadding,
             elevation = ButtonDefaults.elevation(defaultElevation = 0.dp, pressedElevation = 0.dp),
         ) {
-            Text(text = label, fontSize = 14.sp, maxLines = 1)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.button,
+                maxLines = 1,
+            )
         }
     } else {
         OutlinedButton(
@@ -63,7 +75,11 @@ internal fun DemoChoiceChip(
             modifier = minMod,
             contentPadding = ControlPadding,
         ) {
-            Text(text = label, fontSize = 14.sp, maxLines = 1)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.button,
+                maxLines = 1,
+            )
         }
     }
 }
@@ -83,6 +99,10 @@ internal fun DemoActionChip(
             .defaultMinSize(minHeight = ControlMinHeight),
         contentPadding = ControlPadding,
     ) {
-        Text(text = label, fontSize = 14.sp, maxLines = 1)
+        Text(
+            text = label,
+            style = MaterialTheme.typography.button,
+            maxLines = 1,
+        )
     }
 }

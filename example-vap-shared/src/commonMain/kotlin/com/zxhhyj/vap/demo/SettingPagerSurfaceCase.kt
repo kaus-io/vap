@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -13,14 +12,17 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import com.zxhhyj.example_vap_shared.generated.resources.Res
 import com.zxhhyj.example_vap_shared.generated.resources.settings_page_title
-import com.zxhhyj.example_vap_shared.generated.resources.status_missing_about_card
-import com.zxhhyj.example_vap_shared.generated.resources.status_setting_pager_surface
 import com.zxhhyj.vap.player.VapAnimation
 import com.zxhhyj.vap.player.VapConstants
 import com.zxhhyj.vap.player.VapDemoClip
 import com.zxhhyj.vap.player.animateVapCompositionAsState
 import org.jetbrains.compose.resources.stringResource
 
+/**
+ * Runs the Surface-designated pager scenario with one animation state retained outside page content.
+ *
+ * 以保留在页面内容之外的单一动画状态运行 Surface 指定的分页场景。
+ */
 @Composable
 internal fun SettingPagerSurfaceCase(
     clips: List<VapDemoClip>,
@@ -35,13 +37,6 @@ internal fun SettingPagerSurfaceCase(
         case = DemoCase.SettingPagerSurface,
         onBack = onBack,
         modifier = modifier,
-        status = stringResource(
-            Res.string.status_setting_pager_surface,
-            pagerState.currentPage + 1,
-            SETTINGS_PAGER_PAGE_COUNT,
-            pagerState.settledPage,
-            clip?.label ?: stringResource(Res.string.status_missing_about_card),
-        ),
     ) {
         if (clip == null) {
             DemoEmptyState(modifier = Modifier.fillMaxSize())
@@ -60,7 +55,7 @@ internal fun SettingPagerSurfaceCase(
             state = pagerState,
             modifier = Modifier
                 .fillMaxSize()
-                .clip(RoundedCornerShape(14.dp))
+                .clip(MaterialTheme.shapes.large)
                 .background(MaterialTheme.colors.surface),
         ) { page ->
             if (page == 0) {

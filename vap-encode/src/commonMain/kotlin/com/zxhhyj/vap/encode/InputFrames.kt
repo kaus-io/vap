@@ -15,6 +15,8 @@ internal fun resolveInputFrames(inputDir: String): List<String> {
     }
     val frames = ArrayList<String>()
     var i = 0
+    // Encoding consumes only the contiguous sequence from frame 0; the first index gap ends it.
+    // 编码仅使用从第 0 帧开始的连续序列；遇到首个缺号即结束。
     while (i in byIndex) {
         frames += byIndex.getValue(i)
         i++

@@ -29,7 +29,19 @@ import com.zxhhyj.vap.tool.generated.resources.preview_title
 import io.github.vinceglb.filekit.FileKit
 import org.jetbrains.compose.resources.stringResource
 
-fun main() {
+/**
+ * Tool entry point. When invoked with CLI args, hands off to [Cli] and exits with
+ * its return code; otherwise boots the Compose UI: the main [ToolApp] window plus a
+ * secondary [PreviewWindow] that pops up after a successful encode.
+ *
+ * 工具入口。带 CLI 参数时直接交给 [Cli] 并以返回码退出;无参数则启动 Compose UI:
+ * 主 [ToolApp] 窗口 + 编码成功后弹出的 [PreviewWindow]。
+ */
+fun main(args: Array<String>) {
+    if (args.isNotEmpty()) {
+        System.exit(Cli.run(args))
+        return
+    }
     FileKit.init(appId = "com.zxhhyj.vap.tool")
     application {
         var previewPath by remember { mutableStateOf<String?>(null) }
@@ -56,6 +68,14 @@ fun main() {
     }
 }
 
+/**
+ * Secondary window that loops the just-encoded VAP file forever. Recomposing on a
+ * new path resets the composition state, so closing and re-opening the window
+ * cleanly swaps the previewed clip.
+ *
+ * 副窗口:循环播放刚编码好的 VAP 文件。基于 `path` 重置 composition 状态,
+ * 因此关闭再打开即可干净地切换预览片段。
+ */
 @Composable
 private fun PreviewWindow(path: String) {
     MaterialTheme {

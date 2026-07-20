@@ -32,17 +32,20 @@ jobs:
           mkdir -p artifacts
           for module in $(./gradlew -q printPublishableModules --no-configuration-cache); do
             if [ -d "$module/build/libs" ]; then
-              find "$module/build/libs" -type f \( \
-                  -name "*-${VERSION}.jar" -o \
-                  -name "*-${VERSION}.aar" \
-                \) \
+              find "$module/build/libs" -type f \
+                -name "*-${VERSION}.jar" \
                 -not -name "*-metadata-${VERSION}.jar" \
+                -not -name "*-sources.jar" \
+                -not -name "*-javadoc.jar" \
                 -exec cp {} artifacts/ \;
             fi
+            # AGP KMP library emits unversioned "$module.aar"; Maven publishes it as
+            # "$module-android-$VERSION.aar" — rename to match Central / GH release naming.
             if [ -d "$module/build/outputs/aar" ]; then
-              find "$module/build/outputs/aar" -type f \
-                -name "*-${VERSION}*.aar" \
-                -exec cp {} artifacts/ \;
+              for aar in "$module"/build/outputs/aar/*.aar; do
+                [ -f "$aar" ] || continue
+                cp "$aar" "artifacts/${module}-android-${VERSION}.aar"
+              done
             fi
           done
       - uses: softprops/action-gh-release@v2

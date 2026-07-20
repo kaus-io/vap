@@ -9,6 +9,7 @@ plugins {
 dependencies {
     implementation(projects.vapEncode)
     implementation(projects.vapCompose)
+    implementation(projects.vapDecodeJvm)
 
     implementation(compose.desktop.currentOs)
     implementation(libs.compose.components.resources)

@@ -10,6 +10,11 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.TimeUnit
 
+/**
+ * Android filesystem actual used by the common encoder pipeline.
+ *
+ * 公共编码流程使用的 Android 文件系统 actual 实现。
+ */
 internal actual object PlatformFs {
     actual fun exists(path: String): Boolean = File(path).exists()
 
@@ -54,8 +59,17 @@ internal actual object PlatformFs {
     }
 }
 
+/**
+ * Android PNG actual; Bitmap pixels are copied into caller-owned row-major ARGB arrays.
+ *
+ * Android PNG actual 实现；Bitmap 像素会复制到归调用方所有的行优先 ARGB 数组中。
+ */
 internal actual object PlatformPng {
     actual fun readSize(path: String): VapSize? {
+        // `inJustDecodeBounds = true` makes BitmapFactory parse only the PNG header and skip pixel
+        // allocation; outWidth/outHeight are populated without decoding the full image.
+        // `inJustDecodeBounds = true` 让 BitmapFactory 仅解析 PNG 头而跳过像素分配；
+        // outWidth/outHeight 在不解码整张图像的情况下被填充。
         val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(path, opts)
         if (opts.outWidth <= 0 || opts.outHeight <= 0) return null
@@ -67,6 +81,8 @@ internal actual object PlatformPng {
         val w = bitmap.width
         val h = bitmap.height
         val argb = IntArray(w * h)
+        // getPixels copies out the data; recycling the Bitmap does not invalidate the returned array.
+        // getPixels 会复制数据；回收 Bitmap 不会使返回的数组失效。
         bitmap.getPixels(argb, 0, w, 0, 0, w, h)
         bitmap.recycle()
         return ArgbImage(w, h, argb)
@@ -83,6 +99,11 @@ internal actual object PlatformPng {
     }
 }
 
+/**
+ * Android process actual; output is drained to avoid pipe backpressure and cancellation forcibly stops the child.
+ *
+ * Android 进程 actual 实现；持续排空输出以避免管道反压，协程取消时强制终止子进程。
+ */
 internal actual object PlatformProcess {
     actual suspend fun run(command: List<String>): Int = withContext(Dispatchers.IO) {
         val process = ProcessBuilder(command)

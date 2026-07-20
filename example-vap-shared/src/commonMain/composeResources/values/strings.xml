@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <resources>
     <string name="demo_home_title">VAP Cases</string>
-    <string name="demo_home_subtitle">对照 app-hanna 场景测效果与滑动/切态性能</string>
+    <string name="demo_home_subtitle">对照 app-hanna 场景 · 压测请用 adb PRESENT_BENCHMARK</string>
     <string name="demo_back">返回</string>
     <string name="demo_empty_assets">无可用 VAP 素材</string>
     <string name="demo_platform_unavailable">当前平台不支持此 Case（Android Surface）</string>
@@ -16,16 +16,34 @@
     <string name="case_hanna_ball_subtitle">Idle/Think/Speech · 三态常驻会话</string>
     <string name="case_window_expand_title">Window Expand</string>
     <string name="case_window_expand_subtitle">仿 HannaWindow 展开 · 测首帧是否偏晚</string>
+    <string name="case_window_cold_show_title">Window Cold Show</string>
+    <string name="case_window_cold_show_subtitle">白屏对照 · Cold remount vs Warm keep</string>
     <string name="case_touch_wake_title">Touch Wake</string>
     <string name="case_touch_wake_subtitle">圆形悬浮按钮 · touch_wake</string>
+    <string name="case_gpu_backend_title">GPU Backend</string>
+    <string name="case_gpu_backend_subtitle">ES2 / ES3 / Vulkan · 切换会 remount 会话</string>
     <string name="case_present_benchmark_title">Present Benchmark</string>
     <string name="case_present_benchmark_subtitle">10s 采样 present FPS · 对照限帧网格</string>
     <string name="case_concurrent_benchmark_title">Concurrent Benchmark</string>
     <string name="case_concurrent_benchmark_subtitle">多实例同播 · 可脚本化压测</string>
+    <string name="case_pag_present_benchmark_title">PAG Present Benchmark</string>
+    <string name="case_pag_present_benchmark_subtitle">libpag · org.libpag.PAGView · 同名 .pag 素材</string>
+    <string name="case_pag_concurrent_benchmark_title">PAG Concurrent Benchmark</string>
+    <string name="case_pag_concurrent_benchmark_subtitle">libpag 多实例 · PAGView · 对照 VAP 压测</string>
+    <string name="case_pag_image_view_present_benchmark_title">PAGImageView Present Benchmark</string>
+    <string name="case_pag_image_view_present_benchmark_subtitle">libpag · org.libpag.PAGImageView · 同名 .pag 素材</string>
+    <string name="case_pag_image_view_concurrent_benchmark_title">PAGImageView Concurrent Benchmark</string>
+    <string name="case_pag_image_view_concurrent_benchmark_subtitle">libpag 多实例 · PAGImageView · 对照 PAGView / VAP</string>
+    <string name="case_state_swap_benchmark_title">StateSwap Benchmark</string>
+    <string name="case_state_swap_benchmark_subtitle">HannaBall 三态切换压测 · cycle 首帧 latency</string>
+    <string name="demo_platform_unavailable_pag">当前平台不支持 PAG（官方仅 Android AAR）</string>
 
     <string name="bench_idle">Idle</string>
     <string name="bench_home">Home</string>
     <string name="bench_about">About</string>
+    <string name="bench_speech">Speech</string>
+    <string name="bench_think">Think</string>
+    <string name="bench_touch_wake">TouchWake</string>
     <string name="bench_fps_0">PTS</string>
     <string name="bench_fps_30">30fps</string>
     <string name="bench_fps_60">60fps</string>
@@ -47,6 +65,7 @@
     <string name="status_setting_pager_surface">Surface · page=%1$d/%2$d settled=%3$d · %4$s</string>
     <string name="status_missing_about_card">缺少 about_card</string>
     <string name="status_window_expand">target=%1$s current=%2$s playing=%3$s h=%4$ddp · %5$s</string>
+    <string name="status_window_cold_show">%1$s · target=%2$s current=%3$s mounted=%4$s · first=%5$s · %6$s</string>
     <string name="status_missing_idle">缺少 idle</string>
     <string name="status_progress_playing">progress %1$d%% · decoding</string>
     <string name="status_progress_paused">progress %1$d%% · paused</string>
@@ -70,7 +89,20 @@
     <string name="action_show">Show</string>
     <string name="action_hide">Hide</string>
     <string name="gate_hint_like_hanna">对齐 Hanna：展开后才 isPlaying。若动画过半才出图，说明首帧偏晚。</string>
-    <string name="window_collapsed_hint">已收起 · 点 Show 展开</string>
+    <string name="window_collapsed_hint">已隐藏（Cold 已拆树）· 点 Show</string>
+    <string name="mode_cold_remount">Cold</string>
+    <string name="mode_warm_keep">Warm</string>
+    <string name="mode_hot_pause">Hot</string>
+    <string name="window_cold_hint">Cold：拆树+拆解码（≈ Hanna removeView）。Warm：树在但仍 release（仍~200ms）。Hot：树在且 pause 不 release——看第 2 次 Show。</string>
+    <string name="window_cold_white_hint">面板为纯白，对齐 Hanna light panel——空 Surface 期间就是「白屏」。</string>
+    <string name="window_cold_latency">Show → 首次 present：%1$s ms（解码 present 计数，非肉眼 vsync）</string>
+    <string name="window_cold_latency_pending">Show → 首次 present：等待中…</string>
+
+    <string name="gpu_backend_es2">ES2</string>
+    <string name="gpu_backend_es3">ES3</string>
+    <string name="gpu_backend_vulkan">Vulkan</string>
+    <string name="gpu_backend_hint">切换会拆掉解码会话并重建 Shared GL。Vulkan 尚未实现时会回退到 ES3/ES2。桌面端仅 ES2。</string>
+    <string name="status_gpu_backend">prefer=%1$s → %2$s · supported=%3$s · %4$s</string>
 
     <string name="stress_minus_one">−1</string>
     <string name="stress_plus_one">+1</string>

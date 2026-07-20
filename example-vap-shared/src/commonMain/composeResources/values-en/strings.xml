@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <resources>
     <string name="demo_home_title">VAP Cases</string>
-    <string name="demo_home_subtitle">Scenarios aligned with app-hanna for playback and scroll/switch performance</string>
+    <string name="demo_home_subtitle">Scenarios aligned with app-hanna · stress via adb PRESENT_BENCHMARK</string>
     <string name="demo_back">Back</string>
     <string name="demo_empty_assets">No VAP assets available</string>
     <string name="demo_platform_unavailable">This case is unavailable on this platform (Android Surface)</string>
@@ -16,12 +16,21 @@
     <string name="case_hanna_ball_subtitle">Idle/Think/Speech · three persistent sessions</string>
     <string name="case_window_expand_title">Window Expand</string>
     <string name="case_window_expand_subtitle">HannaWindow-style expand · first-frame latency</string>
+    <string name="case_window_cold_show_title">Window Cold Show</string>
+    <string name="case_window_cold_show_subtitle">White-flash A/B · Cold remount vs Warm keep</string>
     <string name="case_touch_wake_title">Touch Wake</string>
     <string name="case_touch_wake_subtitle">Circular floating button · touch_wake</string>
+    <string name="case_gpu_backend_title">GPU Backend</string>
+    <string name="case_gpu_backend_subtitle">ES2 / ES3 / Vulkan · remounts the decode session</string>
     <string name="case_present_benchmark_title">Present Benchmark</string>
     <string name="case_present_benchmark_subtitle">10s present-FPS sample · frame-grid pacing</string>
     <string name="case_concurrent_benchmark_title">Concurrent Benchmark</string>
     <string name="case_concurrent_benchmark_subtitle">Multi-instance playback · scriptable stress</string>
+    <string name="case_pag_present_benchmark_title">PAG Present Benchmark</string>
+    <string name="case_pag_present_benchmark_subtitle">libpag control · matching .pag assets</string>
+    <string name="case_pag_concurrent_benchmark_title">PAG Concurrent Benchmark</string>
+    <string name="case_pag_concurrent_benchmark_subtitle">libpag multi-instance · vs VAP stress</string>
+    <string name="demo_platform_unavailable_pag">PAG unavailable here (official Android AAR only)</string>
 
     <string name="bench_idle">Idle</string>
     <string name="bench_home">Home</string>
@@ -47,6 +56,7 @@
     <string name="status_setting_pager_surface">Surface · page=%1$d/%2$d settled=%3$d · %4$s</string>
     <string name="status_missing_about_card">missing about_card</string>
     <string name="status_window_expand">target=%1$s current=%2$s playing=%3$s h=%4$ddp · %5$s</string>
+    <string name="status_window_cold_show">%1$s · target=%2$s current=%3$s mounted=%4$s · first=%5$s · %6$s</string>
     <string name="status_missing_idle">missing idle</string>
     <string name="status_progress_playing">progress %1$d%% · decoding</string>
     <string name="status_progress_paused">progress %1$d%% · paused</string>
@@ -70,7 +80,20 @@
     <string name="action_show">Show</string>
     <string name="action_hide">Hide</string>
     <string name="gate_hint_like_hanna">Hanna-aligned: isPlaying only after expand. Late first frame if content appears mid-animation.</string>
-    <string name="window_collapsed_hint">Collapsed · tap Show to expand</string>
+    <string name="window_collapsed_hint">Hidden (Cold disposed) · tap Show</string>
+    <string name="mode_cold_remount">Cold</string>
+    <string name="mode_warm_keep">Warm</string>
+    <string name="mode_hot_pause">Hot</string>
+    <string name="window_cold_hint">Cold: tear tree+codec (≈ Hanna removeView). Warm: keep tree but still release (~200ms). Hot: pause without release — check 2nd Show.</string>
+    <string name="window_cold_white_hint">Pure white panel (Hanna light) — empty Surface reads as a white flash.</string>
+    <string name="window_cold_latency">Show → first present: %1$s ms (decode present count, not eyeball vsync)</string>
+    <string name="window_cold_latency_pending">Show → first present: waiting…</string>
+
+    <string name="gpu_backend_es2">ES2</string>
+    <string name="gpu_backend_es3">ES3</string>
+    <string name="gpu_backend_vulkan">Vulkan</string>
+    <string name="gpu_backend_hint">Switching tears down the decode session and rebuilds Shared GL. Vulkan falls back to ES3/ES2 until implemented. Desktop supports ES2 only.</string>
+    <string name="status_gpu_backend">prefer=%1$s → %2$s · supported=%3$s · %4$s</string>
 
     <string name="stress_minus_one">−1</string>
     <string name="stress_plus_one">+1</string>

@@ -33,7 +33,10 @@ plugins {
 }
 
 include(":vap-core")
-include(":vap-decode")
+include(":vap-decode-api")
+include(":vap-decode-android")
+include(":vap-decode-jvm")
+include(":vap-vk-android")
 include(":vap-encode")
 include(":vap-compose")
 include(":example-vap-android")

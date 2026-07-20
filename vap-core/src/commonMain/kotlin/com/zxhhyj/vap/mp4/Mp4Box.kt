@@ -1,10 +1,29 @@
 package com.zxhhyj.vap.mp4
 
+/**
+ * Random-access byte source used by the MP4 box parser.
+ *
+ * MP4 盒解析器所用的随机访问字节源。
+ *
+ * `size()` is the total number of bytes exposed; `readAt` must copy exactly
+ * `length` bytes starting at `position` into the destination buffer. The
+ * implementation is expected to be safe to call from any thread as long as the
+ * underlying storage is not mutated concurrently.
+ */
 public interface Mp4Source {
     public fun size(): Long
     public fun readAt(position: Long, buffer: ByteArray, offset: Int = 0, length: Int = buffer.size)
 }
 
+/**
+ * A single ISO BMFF (MP4) box, including its header layout.
+ *
+ * 单个 ISO BMFF (MP4) 盒，包含其头部的布局信息。
+ *
+ * `size` includes the header bytes. When `extendsToEof` is true the box spans to
+ * the end of the container (size field was 0); `payloadSize` is clamped to 0
+ * in that case to avoid negative offsets.
+ */
 public data class Mp4Box(
     val offset: Long,
     val size: Long,
@@ -20,6 +39,15 @@ public object Mp4Sources {
     public fun bytes(data: ByteArray): Mp4Source = ByteArrayMp4Source(data)
 }
 
+/**
+ * Minimal ISO BMFF box scanner that walks top-level boxes.
+ *
+ * 极简 ISO BMFF 盒扫描器，仅遍历顶层盒。
+ *
+ * Supports 32-bit and 64-bit (`size==1`) headers and the `size==0` "to EOF"
+ * convention. The parser is intentionally stateless beyond the input source so
+ * the same instance can be reused across reads.
+ */
 public object Mp4BoxParser {
     public fun parseTopLevel(source: Mp4Source, strict: Boolean = true): List<Mp4Box> {
         val fileSize = source.size()
@@ -57,6 +85,8 @@ public object Mp4BoxParser {
         return null
     }
 
+    // Decodes one box header starting at `offset`; returns null on a clean EOF
+    // only when `strict == false`, otherwise raises on malformed headers.
     private fun readBoxAt(
         source: Mp4Source,
         offset: Long,

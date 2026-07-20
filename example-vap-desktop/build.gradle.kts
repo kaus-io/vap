@@ -8,6 +8,7 @@ plugins {
 
 dependencies {
     implementation(projects.exampleVapShared)
+    implementation(projects.vapDecodeJvm)
 
     implementation(compose.desktop.currentOs)
     implementation(libs.kotlinx.coroutinesSwing)

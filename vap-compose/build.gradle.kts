@@ -22,7 +22,7 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            api(projects.vapDecode)
+            api(projects.vapDecodeApi)
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
             implementation(libs.compose.material)
@@ -30,9 +30,11 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
         }
         androidMain.dependencies {
+            implementation(projects.vapDecodeAndroid)
             implementation(libs.compose.uiToolingPreview)
         }
         jvmMain.dependencies {
+            implementation(projects.vapDecodeJvm)
         }
     }
 }

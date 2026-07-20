@@ -9,6 +9,11 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
 
+/**
+ * JVM filesystem actual used by the common encoder pipeline.
+ *
+ * 公共编码流程使用的 JVM 文件系统 actual 实现。
+ */
 internal actual object PlatformFs {
     actual fun exists(path: String): Boolean = File(path).exists()
 
@@ -52,6 +57,11 @@ internal actual object PlatformFs {
     }
 }
 
+/**
+ * JVM PNG actual; decoded pixels are returned as a new row-major ARGB array.
+ *
+ * JVM PNG actual 实现；解码像素以新分配的行优先 ARGB 数组返回。
+ */
 internal actual object PlatformPng {
     actual fun readSize(path: String): VapSize? {
         val file = File(path)
@@ -67,6 +77,8 @@ internal actual object PlatformPng {
         val w = img.width
         val h = img.height
         val argb = IntArray(w * h)
+        // getRGB copies pixels out of BufferedImage, so ArgbImage owns its array independently.
+        // getRGB 会从 BufferedImage 复制像素，因此 ArgbImage 独立拥有其数组。
         img.getRGB(0, 0, w, h, argb, 0, w)
         return ArgbImage(w, h, argb)
     }
@@ -79,6 +91,11 @@ internal actual object PlatformPng {
     }
 }
 
+/**
+ * JVM process actual; output is drained to avoid pipe backpressure and cancellation forcibly stops the child.
+ *
+ * JVM 进程 actual 实现；持续排空输出以避免管道反压，协程取消时强制终止子进程。
+ */
 internal actual object PlatformProcess {
     actual suspend fun run(command: List<String>): Int = withContext(Dispatchers.IO) {
         val process = ProcessBuilder(command)

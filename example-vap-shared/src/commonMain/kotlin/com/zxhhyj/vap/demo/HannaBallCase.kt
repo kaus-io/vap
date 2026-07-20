@@ -1,7 +1,6 @@
 package com.zxhhyj.vap.demo
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,8 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.MaterialTheme
+import androidx.compose.material.Card
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -20,14 +18,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.zxhhyj.example_vap_shared.generated.resources.Res
 import com.zxhhyj.example_vap_shared.generated.resources.ball_idle
 import com.zxhhyj.example_vap_shared.generated.resources.ball_speech
 import com.zxhhyj.example_vap_shared.generated.resources.ball_think
-import com.zxhhyj.example_vap_shared.generated.resources.status_hanna_ball_missing
-import com.zxhhyj.example_vap_shared.generated.resources.status_hanna_ball_ready
 import com.zxhhyj.vap.player.VapAnimation
 import com.zxhhyj.vap.player.VapAnimationState
 import com.zxhhyj.vap.player.VapConstants
@@ -42,7 +37,11 @@ private enum class BallKind(val labelRes: StringResource, val asset: String) {
     Speech(Res.string.ball_speech, "hanna_window_speech"),
 }
 
-
+/**
+ * Cross-fades among three retained playback states while only the selected state advances.
+ *
+ * 在三个保留的播放状态之间淡入淡出，并且仅推进当前选中的状态。
+ */
 @Composable
 internal fun HannaBallCase(
     clips: List<VapDemoClip>,
@@ -51,29 +50,32 @@ internal fun HannaBallCase(
     modifier: Modifier = Modifier,
 ) {
     var kind by remember { mutableStateOf(BallKind.Idle) }
-    val required =
-        BallKind.entries.mapNotNull { ball -> clips.byLabel(ball.asset)?.let { ball to it } }
-    val ready = required.size == BallKind.entries.size
+    val idleClip = clips.byLabel(BallKind.Idle.asset)
+    val thinkClip = clips.byLabel(BallKind.Think.asset)
+    val speechClip = clips.byLabel(BallKind.Speech.asset)
 
     DemoCaseScaffold(
         case = DemoCase.HannaBall,
         onBack = onBack,
         modifier = modifier,
-        status = if (ready) {
-            stringResource(Res.string.status_hanna_ball_ready, stringResource(kind.labelRes))
-        } else {
-            stringResource(Res.string.status_hanna_ball_missing)
-        },
     ) {
-        if (!ready) {
+        val idle = idleClip
+        val think = thinkClip
+        val speech = speechClip
+        if (idle == null || think == null || speech == null) {
             DemoEmptyState(modifier = Modifier.fillMaxSize())
             return@DemoCaseScaffold
         }
 
-        val sessions = rememberBallSessions(
-            clipsByKind = required.toMap(),
-            playing = kind,
-            onError = onError,
+        // Retain every session and toggle playback to avoid a cold rebuild on each state change.
+        // 保留每个会话并切换播放状态，避免每次状态变化时冷重建。
+        val idleAnim = ballAnim(idle, playing = kind == BallKind.Idle, onError)
+        val thinkAnim = ballAnim(think, playing = kind == BallKind.Think, onError)
+        val speechAnim = ballAnim(speech, playing = kind == BallKind.Speech, onError)
+        val sessions = mapOf(
+            BallKind.Idle to idleAnim,
+            BallKind.Think to thinkAnim,
+            BallKind.Speech to speechAnim,
         )
 
         Column(
@@ -94,26 +96,26 @@ internal fun HannaBallCase(
                 }
             }
 
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(MaterialTheme.colors.surface),
-                contentAlignment = Alignment.Center,
+            Card(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
             ) {
-                AnimatedContent(
-                    targetState = kind,
-                    transitionSpec = { VapFadeTransition },
-                    label = "hannaBall",
-                    modifier = Modifier
-                        .size(120.dp)
-                        .wrapContentSize(unbounded = true),
-                ) { target ->
-                    VapAnimation(
-                        animationState = sessions.getValue(target),
-                        modifier = Modifier.size(160.dp),
-                    )
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    AnimatedContent(
+                        targetState = kind,
+                        transitionSpec = { VapFadeTransition },
+                        label = "hanna-ball",
+                        modifier = Modifier.wrapContentSize(),
+                    ) { current ->
+                        key(current) {
+                            VapAnimation(
+                                animationState = sessions.getValue(current),
+                                modifier = Modifier.size(160.dp),
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -121,22 +123,16 @@ internal fun HannaBallCase(
 }
 
 @Composable
-private fun rememberBallSessions(
-    clipsByKind: Map<BallKind, VapDemoClip>,
-    playing: BallKind,
+private fun ballAnim(
+    clip: VapDemoClip,
+    playing: Boolean,
     onError: (String) -> Unit,
-): Map<BallKind, VapAnimationState> {
-    val states = LinkedHashMap<BallKind, VapAnimationState>()
-    clipsByKind.forEach { (kind, clip) ->
-        key(kind) {
-            val composition = rememberSyncDemoComposition(clip, onError)
-            states[kind] = animateVapCompositionAsState(
-                composition = composition,
-                iterations = VapConstants.IterateForever,
-                isPlaying = playing == kind,
-                onError = { onError("${kind.name}: ${it.message ?: it}") },
-            )
-        }
-    }
-    return states
+): VapAnimationState {
+    val composition = rememberSyncDemoComposition(clip, onError)
+    return animateVapCompositionAsState(
+        composition = composition,
+        iterations = VapConstants.IterateForever,
+        isPlaying = playing,
+        onError = { onError(it.message ?: it.toString()) },
+    )
 }

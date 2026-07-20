@@ -15,7 +15,9 @@ plugins {
 
 val publishableModules = listOf(
     "vap-core",
-    "vap-decode",
+    "vap-decode-api",
+    "vap-decode-android",
+    "vap-decode-jvm",
     "vap-encode",
     "vap-compose",
 )
@@ -46,7 +48,13 @@ configure(subprojects.filter { it.name in publishableModules.toSet() }) {
 
     configure<MavenPublishBaseExtension> {
         publishToMavenCentral()
-        signAllPublications()
+        // Local A/B: publishToMavenLocal -Pversion=1.0.4-LOCAL -PskipSigning
+        val skipSigning = providers.gradleProperty("skipSigning")
+            .map { it == "true" || it == "1" }
+            .orElse(false)
+        if (!skipSigning.get()) {
+            signAllPublications()
+        }
 
         coordinates(group.toString(), project.name, version.toString())
 

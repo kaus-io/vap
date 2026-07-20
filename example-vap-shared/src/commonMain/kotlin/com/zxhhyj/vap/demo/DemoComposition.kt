@@ -7,6 +7,11 @@ import com.zxhhyj.vap.player.VapDemoClip
 import com.zxhhyj.vap.player.loadVapComposition
 
 
+/**
+ * Synchronously loads and memoizes a composition by clip label and source; failures become UI errors and `null`.
+ *
+ * 按片段标签和来源同步加载并缓存合成；加载失败会转换为界面错误和 `null`。
+ */
 @Composable
 internal fun rememberSyncDemoComposition(
     clip: VapDemoClip?,

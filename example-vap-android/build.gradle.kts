@@ -14,6 +14,8 @@ kotlin {
 
 dependencies {
     implementation(projects.exampleVapShared)
+    implementation(projects.vapDecodeAndroid)
+    implementation(projects.vapVkAndroid)
 
     implementation(libs.androidx.activity.compose)
 
